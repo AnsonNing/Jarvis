@@ -1,0 +1,33 @@
+# Synthetic example only. NOT a real trading strategy or financial backtest.
+schema_version: 1
+kind: ResearchTask
+task_id: synthetic-search-v1
+domain: synthetic
+goal: improve_declared_objective
+hypotheses_allowed:
+  - parameter_change
+  - diagnostic_analysis
+primary_metric: objective_score
+metric_direction: maximize
+secondary_metrics:
+  - computation_cost
+acceptance:
+  minimum_primary_improvement: 0.01
+  allow_no_improvement: true
+split_policy:
+  development_id: synthetic-dev-v1
+  selection_id: synthetic-selection-v1
+  locked_test_id: synthetic-test-v1
+budget:
+  max_actions: 20
+  max_tool_calls: 30
+  max_llm_tokens: 200000
+  max_wall_seconds: 14400
+  max_compute_units: 40
+  max_parallel_jobs: 2
+permissions:
+  allow_generated_code: false
+  allow_external_search: false
+  allow_live_execution: false
+world_ref: synthetic-world-v1
+parent_task_id: null
