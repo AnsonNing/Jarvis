@@ -77,7 +77,7 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.artifacts = ArtifactStore(self.root / "artifacts")
         self.db_path = self.root / "journal.sqlite3"
-        with self.connect() as conn:
+        with self.bootstrap_lock(), contextlib.closing(self.connect()) as conn:
             conn.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS campaigns (
@@ -113,6 +113,16 @@ class Store:
                 );
             """)
         os.chmod(self.db_path, 0o600)
+
+    @contextlib.contextmanager
+    def bootstrap_lock(self) -> Iterator[None]:
+        """Serialize first WAL/schema setup across newly started processes."""
+        with (self.root / ".bootstrap.lock").open("a") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream, fcntl.LOCK_UN)
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30)

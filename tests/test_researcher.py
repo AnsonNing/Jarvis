@@ -116,7 +116,7 @@ mode=MODE
 print(json.dumps({'type':'thread.started','thread_id':'fixture-thread'}))
 if mode=='tool': print(json.dumps({'type':'item.completed','item':{'type':'command_execution','command':'forbidden'}}))
 answer.write_text('{"ok":true}' if mode!='malformed' else 'bad-json')
-if mode!='missing_usage': print(json.dumps({'type':'turn.completed','usage':{'input_tokens':100,'cached_input_tokens':80,'output_tokens':20}}))
+if mode!='missing_usage': print(json.dumps({'type':'turn.completed','usage':{} if mode=='empty_usage' else {'input_tokens':100,'cached_input_tokens':80,'output_tokens':20}}))
 if mode=='failure': sys.exit(1)
 """
     path.write_text(f"#!{sys.executable}\n" + body.replace("MODE", repr(mode)))
@@ -130,6 +130,7 @@ if mode=='failure': sys.exit(1)
         ("valid", None),
         ("malformed", "INVALID_STRUCTURED_RESPONSE"),
         ("missing_usage", "PROVIDER_INCOMPLETE"),
+        ("empty_usage", "USAGE_UNAVAILABLE"),
         ("tool", "FORBIDDEN_PROVIDER_TOOL"),
         ("failure", "PROVIDER_INCOMPLETE"),
     ],
@@ -140,7 +141,7 @@ def test_real_subprocess_transport_and_usage(tmp_path, mode, error):
     assert provider.identity()["version"] == "fixture-codex 1"
     result = provider.complete("Synthetic prompt only", {"type": "object"}, tmp_path / "request")
     assert result["error"] == error
-    if mode in {"missing_usage", "failure"}:
+    if mode in {"missing_usage", "empty_usage", "failure"}:
         assert result["cost"] is None
     else:
         assert result["cost"]["llm_tokens"] == 120  # cached input is not added twice

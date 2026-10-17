@@ -28,6 +28,15 @@ def reserve_worker(root, campaign, queue):
         queue.put("bounded")
 
 
+def bootstrap_worker(root, barrier, queue):
+    barrier.wait(timeout=15)
+    try:
+        Store(root)
+        queue.put("ready")
+    except Exception as exc:
+        queue.put(type(exc).__name__ + ": " + str(exc))
+
+
 def test_sealed_artifact_and_path_traversal(tmp_path):
     store = Store(tmp_path)
     ref = store.artifacts.put({"result": 42})
@@ -107,3 +116,19 @@ def test_hash_chain_tamper_detected_even_without_trigger(tmp_path):
         conn.execute("UPDATE events SET event_json=? WHERE sequence=1", (json.dumps(raw),))
     with pytest.raises(IntegrityError):
         store.events(campaign)
+
+
+def test_simultaneous_first_database_creation(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(4)
+    queue = ctx.Queue()
+    workers = [
+        ctx.Process(target=bootstrap_worker, args=(tmp_path / "new-store", barrier, queue))
+        for _ in range(4)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(20)
+        assert worker.exitcode == 0
+    assert [queue.get(timeout=1) for _ in workers] == ["ready"] * 4

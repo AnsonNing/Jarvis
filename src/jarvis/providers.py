@@ -71,6 +71,8 @@ class CodexProvider:
             "features.memories=false",
             "features.multi_agent=false",
             "features.hooks=false",
+            "features.image_generation=false",
+            "features.remote_plugin=false",
             'web_search="disabled"',
             "features.unbounded_connection_retries=false",
         ]:
