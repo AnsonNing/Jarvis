@@ -16,6 +16,7 @@ from jarvis.contracts import (
 )
 from jarvis.identity import digest
 from jarvis.policy import admit
+from jarvis.researcher import ResearchTurn, prompt_context, prompt_matches, verify_designed_action
 from jarvis.storage import Store
 
 
@@ -50,6 +51,10 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
     completed: set[str] = set()
     frozen = False
     formal_count = 0
+    accepted_agents: dict[str, str] = {}
+    used_agents: set[str] = set()
+    research_snapshots: dict[int, set[str]] = {0: set()}
+    research_digests: set[str] = set()
     for e in events:
         payload = e["payload"]
         if e["event_type"] == "CANDIDATE_FROZEN":
@@ -84,14 +89,82 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
                     or prior.selected_policy_id != manifest["policy_id"]
                 ):
                     raise IntegrityError("decision contains hindsight or incompatible state")
-                admit(PolicyDecision.model_validate(request["decision"]), prior)
-                action = ActionSpec.model_validate(request["action"])
-                if (
-                    action not in prior.available_actions
-                    or action.split_id != task.split_policy.development_id
-                ):
-                    raise IntegrityError("unadmitted action/split")
+                if request.get("agent_call"):
+                    context = request["context"]
+                    if any(
+                        digest(t) not in research_snapshots[prior.sequence]
+                        for t in context["prior_research"]
+                    ):
+                        raise IntegrityError("agent context contains future research proposals")
+                    expected = prompt_context(
+                        task, prior, context["prior_research"], context["repair_reason"]
+                    )
+                    if (
+                        digest(context) != digest(expected)
+                        or not prompt_matches(request["prompt"], context)
+                        or request["request_id"] != context["request_id"]
+                    ):
+                        raise IntegrityError(
+                            "agent context differs from decision-time visible evidence"
+                        )
+                else:
+                    admit(PolicyDecision.model_validate(request["decision"]), prior)
+                    action = ActionSpec.model_validate(request["action"])
+                    if request.get("research_turn_ref"):
+                        agent_id = request["agent_job_id"]
+                        if (
+                            accepted_agents.get(agent_id) != request["research_turn_ref"]
+                            or agent_id in used_agents
+                        ):
+                            raise IntegrityError("agent proposal unpaid, unknown or reused")
+                        turn = ResearchTurn.model_validate(
+                            store.artifacts.get(request["research_turn_ref"])
+                        )
+                        verify_designed_action(turn, prior, request["agent_request_id"], action)
+                        used_agents.add(agent_id)
+                    elif action not in prior.available_actions:
+                        raise IntegrityError("unadmitted action")
+                    if action.split_id != task.split_policy.development_id:
+                        raise IntegrityError("unadmitted split")
             reserved.add(job_id)
+        if e["event_type"] == "AGENT_COMPLETED":
+            job_id = payload["job_id"]
+            if job_id not in reserved or job_id in completed:
+                raise IntegrityError("unreserved or duplicate agent completion")
+            job = job_index[job_id]
+            request = store.artifacts.get(job["request_ref"])
+            receipt = store.artifacts.get(payload["receipt_ref"])
+            if (
+                not request.get("agent_call")
+                or not job["finalized"]
+                or receipt["request_ref"] != job["request_ref"]
+                or receipt["job_id"] != job_id
+                or receipt["world_id"] != manifest["world_id"]
+                or job["receipt_ref"] != payload["receipt_ref"]
+                or Cost.model_validate_json(job["actual"]) != Cost.model_validate(receipt["cost"])
+            ):
+                raise IntegrityError("agent receipt/usage settlement mismatch")
+            if payload.get("turn_ref"):
+                turn = ResearchTurn.model_validate(store.artifacts.get(payload["turn_ref"]))
+                if digest(turn) != digest(receipt["answer"]):
+                    raise IntegrityError("agent proposal differs from the observed provider answer")
+                accepted_agents[job_id] = payload["turn_ref"]
+                research_digests.add(digest(turn))
+            completed.add(job_id)
+        if e["event_type"] == "DECISION" and payload.get("agent_job_id"):
+            agent_id = payload["agent_job_id"]
+            if (
+                accepted_agents.get(agent_id) != payload["research_turn_ref"]
+                or agent_id in used_agents
+            ):
+                raise IntegrityError("terminal agent proposal unpaid, unknown or reused")
+            turn = ResearchTurn.model_validate(store.artifacts.get(payload["research_turn_ref"]))
+            prior = ResearchState.model_validate(payload["state"])
+            decision = PolicyDecision.model_validate(payload["decision"])
+            admit(decision, prior)
+            if turn.state_hash != prior.identity or turn.experiment.template_id != "stop":
+                raise IntegrityError("invalid terminal agent decision")
+            used_agents.add(agent_id)
         if e["event_type"] in {"NODE_COMPLETED", "FORMAL_RESULT"} and "receipt_ref" in payload:
             receipt = store.artifacts.get(payload["receipt_ref"])
             job_id = receipt["job_id"]
@@ -146,6 +219,7 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
                     raise IntegrityError("invalid locked-test lifecycle")
             completed.add(job_id)
         snapshots[e["sequence"]] = (tuple(visible), tuple(observations), tuple(evaluations), parent)
+        research_snapshots[e["sequence"]] = set(research_digests)
     if reserved != set(job_index) or completed != {
         j["id"] for j in job_index.values() if j["finalized"]
     }:
@@ -158,6 +232,13 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
         "development_nodes": len(observations),
         "jobs": len(job_index),
         "formal_reveals": formal_count,
+        "agent_completions": len(
+            [
+                j
+                for j in job_index.values()
+                if store.artifacts.get(j["request_ref"]).get("agent_call") and j["finalized"]
+            ]
+        ),
         "scope": world.scope,
         "usage": store.usage(campaign_id),
     }

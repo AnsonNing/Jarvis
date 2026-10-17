@@ -21,6 +21,45 @@ def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False))
 
 
+def agent_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--agent", choices=["q0", "codex"], default="q0")
+    parser.add_argument("--codex-executable", default="codex")
+    parser.add_argument(
+        "--model", help="Optional explicit provider model; default uses installed CLI default"
+    )
+    parser.add_argument("--llm-token-budget", type=int, default=200000)
+    parser.add_argument("--llm-timeout", type=int, default=120)
+    parser.add_argument("--max-llm-calls", type=int, default=8)
+    parser.add_argument("--goal", help="Research objective frozen at campaign creation")
+
+
+def agent_configuration(task: ResearchTask, args: argparse.Namespace) -> tuple[ResearchTask, Any]:
+    from jarvis.researcher import AgentConfig
+
+    if args.goal:
+        task = task.model_copy(update={"goal": args.goal})
+    if args.agent == "q0":
+        return ResearchTask.model_validate(task.model_dump()), None
+    config = AgentConfig(
+        executable=args.codex_executable,
+        model=args.model,
+        timeout_seconds=args.llm_timeout,
+        max_calls=args.max_llm_calls,
+    )
+    budget = task.budget.model_copy(
+        update={
+            "max_llm_tokens": args.llm_token_budget,
+            "max_wall_seconds": max(1800.0, task.budget.max_wall_seconds),
+        }
+    )
+    # Validate command-line budget changes, including negative/boolean inputs.
+    budget = type(task.budget).model_validate(budget.model_dump())
+    hypotheses = tuple(dict.fromkeys((*task.hypotheses_allowed, "parameter_change")))
+    return ResearchTask.model_validate(
+        task.model_copy(update={"budget": budget, "hypotheses_allowed": hypotheses}).model_dump()
+    ), config
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jarvis", description="Durable local research campaigns")
     p.add_argument(
@@ -36,6 +75,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("path", type=Path)
     start.add_argument("--policy", choices=["Q0"], default="Q0")
     start.add_argument("--max-steps", type=int)
+    agent_options(start)
     for op in ["status", "resume", "pause", "stop", "report"]:
         sub = campaign.add_parser(op)
         sub.add_argument("campaign_id")
@@ -60,6 +100,7 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--ledger-root", type=Path)
         if op == "start":
             sub.add_argument("--max-steps", type=int)
+            agent_options(sub)
     materialize = hermes.add_parser("materialize")
     materialize.add_argument("--root", type=Path, required=True)
     materialize.add_argument("--side", choices=["long", "short"], required=True)
@@ -81,10 +122,10 @@ def run(args: argparse.Namespace) -> None:
         emit({"status": "VALID", "task_identity": task.identity, "domain": task.domain})
         return
     if args.command == "schema":
-        from jarvis import agents, contracts, policy
+        from jarvis import agents, contracts, policy, researcher
 
         args.output.mkdir(parents=True, exist_ok=True)
-        for module in [contracts, agents, policy]:
+        for module in [contracts, agents, policy, researcher]:
             for name in dir(module):
                 model = getattr(module, name)
                 if isinstance(model, type) and issubclass(model, contracts.Record):
@@ -111,7 +152,8 @@ def run(args: argparse.Namespace) -> None:
         if args.operation == "inspect":
             emit(adapter.inspect())
         else:
-            campaign_id = engine.create(adapter.task(), adapter)
+            task, config = agent_configuration(adapter.task(), args)
+            campaign_id = engine.create(task, adapter, researcher=config)
             emit(
                 {
                     "campaign_id": campaign_id,
@@ -131,9 +173,9 @@ def run(args: argparse.Namespace) -> None:
         spec = (
             PolicySpec.model_validate(yaml.safe_load(args.policy.read_text()))
             if args.policy
-            else PolicySpec()
+            else None
         )
-        emit(replay(store, args.campaign_id, FixedPolicy(spec)))
+        emit(replay(store, args.campaign_id, FixedPolicy(spec) if spec else None))
         return
     if args.operation == "start":
         task = load_task(args.path)
@@ -141,7 +183,8 @@ def run(args: argparse.Namespace) -> None:
             raise JarvisError(
                 "Hermes requires explicit local configuration: use hermes start --root --side"
             )
-        campaign_id = engine.create(task)
+        task, config = agent_configuration(task, args)
+        campaign_id = engine.create(task, researcher=config)
         emit(
             {
                 "campaign_id": campaign_id,

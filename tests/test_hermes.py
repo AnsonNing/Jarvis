@@ -206,3 +206,55 @@ def test_explicit_derived_ledger_must_match_pinned_metadata(hermes, tmp_path):
     write_json(derived / "provenance.json", provenance)
     with pytest.raises(IntegrityError, match="metadata version"):
         HermesAdapter(hermes, "long", derived).validate(HermesAdapter(hermes, "long").task())
+
+
+def test_llm_designs_two_distinct_frozen_model_comparisons(hermes, tmp_path):
+    from test_agent_runtime import ScriptedProvider
+
+    from jarvis.researcher import AgentConfig
+
+    adapter = HermesAdapter(hermes, "long")
+    protected = adapter.hashes()
+    provider = ScriptedProvider()
+    store = Store(tmp_path / "llm-evidence")
+    engine = CampaignEngine(store, provider_factory=lambda _: provider)
+    task = adapter.task().model_copy(
+        update={"budget": adapter.task().budget.model_copy(update={"max_llm_tokens": 10000})}
+    )
+    campaign = engine.create(task, adapter, researcher=AgentConfig(reserve_tokens=1000))
+    assert engine.run(campaign) == "CLOSED"
+    value = report(store, campaign)
+    experiments = [e for e in value["experiments"] if e["action"] == "threshold_experiment"]
+    assert len(experiments) == 2
+    assert experiments[0]["metrics"]["entry_pl_difference"] == 0
+    assert experiments[1]["metrics"]["entry_pl_difference"] == -2
+    assert provider.calls[-2]["observations"][-1]["action_id"] == "threshold_experiment"
+    assert value["formal"]["status"] == "NOT_RUN"
+    assert adapter.hashes() == protected
+    from jarvis.policy import FixedPolicy, PolicySpec
+    from jarvis.replay import replay
+
+    alternative = replay(store, campaign, FixedPolicy(PolicySpec(prefer=("threshold_experiment",))))
+    assert alternative["status"] == "INSUFFICIENT_COVERAGE"
+    assert alternative["reason"] == "UNRECORDED_EXPERIMENT_DESIGN"
+
+
+def test_grouped_diagnostic_and_candidate_do_not_replace_frozen_baseline(hermes):
+    from jarvis.history import verify
+
+    adapter = HermesAdapter(hermes, "long")
+    store = Store(hermes.parent / "tool-evidence")
+    engine = CampaignEngine(store)
+    campaign = engine.create(adapter.task(), adapter)
+    engine.run(campaign, max_steps=2)
+    state = engine.state(campaign, adapter)
+    prototype = next(
+        a
+        for a in adapter.research_frontier(adapter.task(), state)
+        if a.action_id == "conditional_analysis"
+    )
+    result = adapter.execute(prototype.model_copy(update={"arguments": {"group_by": "day"}}))
+    grouped = json.loads(result.findings[0])
+    assert sum(g["entry_pl"] for g in grouped["groups"]) == 13
+    assert adapter.baseline()["entry_pl"] == 13
+    verify(store, campaign)

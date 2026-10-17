@@ -38,6 +38,23 @@ def report(store: Store, campaign_id: str) -> dict[str, Any]:
             }
         )
     events = store.events(campaign_id)
+    agent_attempts = []
+    for event in events:
+        if event["event_type"] == "AGENT_COMPLETED":
+            payload = event["payload"]
+            receipt = store.artifacts.get(payload["receipt_ref"])
+            agent_attempts.append(
+                {
+                    "job_id": payload["job_id"],
+                    "usage": receipt["usage"],
+                    "cost": receipt["cost"],
+                    "rejection": payload["rejection"],
+                    "turn_ref": payload["turn_ref"],
+                    "turn": store.artifacts.get(payload["turn_ref"])
+                    if payload["turn_ref"]
+                    else None,
+                }
+            )
     formal = next((e["payload"] for e in events if e["event_type"] == "FORMAL_RESULT"), None)
     if formal and "evaluation_ref" in formal:
         formal = {**formal, "evaluation": store.artifacts.get(formal["evaluation_ref"])}
@@ -63,16 +80,20 @@ def report(store: Store, campaign_id: str) -> dict[str, Any]:
         "world_id": manifest["world_id"],
         "policy_id": manifest["policy_id"],
         "scope": manifest["world"]["scope"],
-        "controller": "deterministic Q0; no external LLM calls",
+        "controller": "LLM research agent / codex-cli"
+        if manifest.get("researcher")
+        else "deterministic Q0; no external LLM calls",
+        "agent_attempts": agent_attempts,
         "experiments": experiments,
         "formal": formal,
         "usage": store.usage(campaign_id),
+        "resource_totals": store.resource_totals(campaign_id),
         "verification": verification,
         "limitations": scope_limits
         + [
-            "Generated-code execution and live LLM integration are not implemented",
+            "Generated-code execution is disabled; experiments use admitted adapter parameters",
             "No live trading, fresh strategy holdout, capability transfer or Dream-RSI improvement is established",
-            "Existing artifacts are human-provided; analyses are not autonomous strategy discoveries",
+            "Existing model artifacts are human-provided; LLM hypotheses and interpretations are advisory",
         ],
     }
     return value
@@ -103,9 +124,49 @@ def render_markdown(value: dict[str, Any]) -> str:
             "Every attempt, including negative results, remains in the evidence store.",
             "",
             f"Resource usage: `{value['usage']}`",
+            f"Measured actual usage: `{value['resource_totals']['actual']}`",
+            f"Pending reservations (not measured consumption): `{value['resource_totals']['pending']}`",
             "",
         ]
     )
+    if value.get("agent_attempts"):
+        lines.extend(
+            [
+                "",
+                "## LLM research decisions",
+                "",
+                "Model interpretations are advisory; numerical results above come from the fixed adapters/evaluator.",
+                "",
+            ]
+        )
+        for index, attempt in enumerate(value["agent_attempts"], 1):
+            turn = attempt["turn"]
+            if turn is None:
+                lines.extend(
+                    [
+                        f"Attempt {index}: rejected; {attempt['rejection']}. Usage: {attempt['usage']}.",
+                        "",
+                    ]
+                )
+                continue
+            design = turn["experiment"]
+            lines.extend(
+                [
+                    f"### Decision {index}: {turn['next_direction']} → {design['template_id']}",
+                    "",
+                    turn["analysis_summary"],
+                    "",
+                    f"Hypothesis: {turn['hypothesis']['claim']}",
+                    f"Mechanism: {turn['hypothesis']['mechanism']}",
+                    f"Falsification: {turn['hypothesis']['falsification']}",
+                    f"Intervention: {design['intervention']}",
+                    f"Controls: {', '.join(design['controlled_variables'])}",
+                    f"Parameters: `{design['parameters']}`",
+                    f"Predeclared criterion: {design['success_criterion']}",
+                    f"Evidence: `{turn['evidence_refs']}`",
+                    "",
+                ]
+            )
     for item in value["experiments"]:
         lines.extend(["", f"## {item['action']}", ""])
         if item["metrics"]:

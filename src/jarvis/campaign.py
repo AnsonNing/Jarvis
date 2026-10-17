@@ -9,11 +9,13 @@ import json
 import platform
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from jarvis.adapters import DomainAdapter
+from jarvis.agent_runtime import AgentNeedsReconciliation, AgentRuntime
 from jarvis.agents import critique, curate, role_records
 from jarvis.contracts import (
     ActionSpec,
@@ -31,6 +33,8 @@ from jarvis.contracts import (
 from jarvis.evaluation import evaluate, evaluator_identity
 from jarvis.identity import digest, file_digest
 from jarvis.policy import FixedPolicy, PolicySpec, admit
+from jarvis.providers import CodexProvider, ResearchProvider
+from jarvis.researcher import AgentConfig, policy_identity
 from jarvis.storage import Store, utcnow
 from jarvis.synthetic import SyntheticAdapter
 
@@ -89,14 +93,36 @@ class InjectedInterruption(BaseException):
 
 
 class CampaignEngine:
-    def __init__(self, store: Store):
+    def __init__(
+        self,
+        store: Store,
+        provider_factory: Callable[[AgentConfig], ResearchProvider] | None = None,
+    ):
         self.store = store
+        self.provider_factory = provider_factory or CodexProvider
 
-    def create(self, task: ResearchTask, adapter: DomainAdapter | None = None) -> str:
+    def create(
+        self,
+        task: ResearchTask,
+        adapter: DomainAdapter | None = None,
+        *,
+        researcher: AgentConfig | None = None,
+    ) -> str:
         adapter = adapter or SyntheticAdapter(task.world_ref)
         adapter.validate(task)
         identity = adapter.identity()
         env = environment()
+        researcher_manifest = None
+        selected_policy = FixedPolicy().identity
+        if researcher:
+            if task.budget.max_llm_tokens < researcher.reserve_tokens:
+                raise AdmissionError("LLM budget cannot cover one declared provider reservation")
+            descriptor = self.provider_factory(researcher).identity()
+            selected_policy = policy_identity(researcher, descriptor)
+            researcher_manifest = {
+                "config": researcher.model_dump(mode="json"),
+                "provider_identity": descriptor,
+            }
         world = WorldSpec(
             task_identity=task.identity,
             domain=task.domain,
@@ -123,7 +149,8 @@ class CampaignEngine:
                 "environment": env,
                 "code_provenance": code_provenance(),
                 "policy": PolicySpec().model_dump(mode="json"),
-                "policy_id": FixedPolicy().identity,
+                "policy_id": selected_policy,
+                **({"researcher": researcher_manifest} if researcher_manifest else {}),
                 "local_adapter": adapter.local_manifest(),
             }
         )
@@ -144,6 +171,13 @@ class CampaignEngine:
         task = ResearchTask.model_validate(manifest["task"])
         world = WorldSpec.model_validate(manifest["world"])
         actual = adapter.identity()
+        expected_policy = FixedPolicy(PolicySpec.model_validate(manifest["policy"])).identity
+        if manifest.get("researcher"):
+            config = AgentConfig.model_validate(manifest["researcher"]["config"])
+            descriptor = self.provider_factory(config).identity()
+            if descriptor != manifest["researcher"]["provider_identity"]:
+                raise IntegrityError("frozen provider executable/config changed")
+            expected_policy = policy_identity(config, descriptor)
         if (
             world.identity != manifest["world_id"]
             or task.identity != world.task_identity
@@ -154,8 +188,7 @@ class CampaignEngine:
             or actual["dataset_identity"] != world.dataset_identity
             or digest(task.split_policy) != world.split_identity
             or task.budget != world.budget
-            or FixedPolicy(PolicySpec.model_validate(manifest["policy"])).identity
-            != manifest["policy_id"]
+            or expected_policy != manifest["policy_id"]
         ):
             raise IntegrityError("frozen World/source/environment changed; create a new campaign")
         adapter.validate(task)
@@ -191,7 +224,12 @@ class CampaignEngine:
             available_actions=(),
             selected_policy_id=manifest["policy_id"],
         )
-        return state.model_copy(update={"available_actions": adapter.frontier(task, state)})
+        builder = (
+            getattr(adapter, "research_frontier", adapter.frontier)
+            if manifest.get("researcher")
+            else adapter.frontier
+        )
+        return state.model_copy(update={"available_actions": builder(task, state)})
 
     def _complete(self, campaign_id: str, job: dict[str, Any], task: ResearchTask) -> bool:
         receipt = self.store.read_receipt(job["id"])
@@ -413,6 +451,10 @@ class CampaignEngine:
             manifest = self.store.manifest(campaign_id)
             adapter = self.adapter(manifest)
             task = self.verify_world(manifest, adapter)
+            runtime = None
+            if manifest.get("researcher"):
+                config = AgentConfig.model_validate(manifest["researcher"]["config"])
+                runtime = AgentRuntime(self.store, config, self.provider_factory(config))
             if self.store.get_control(campaign_id) == "CANCELLED":
                 self.store.set_status(campaign_id, "CANCELLED")
                 return "CANCELLED"
@@ -422,7 +464,7 @@ class CampaignEngine:
                 if job["finalized"]:
                     continue
                 request = self.store.artifacts.get(job["request_ref"])
-                if request.get("formal"):
+                if request.get("formal") or request.get("agent_call"):
                     continue
                 if self._complete(campaign_id, job, task):
                     continue
@@ -431,6 +473,11 @@ class CampaignEngine:
                     return "NEEDS_RECONCILIATION"
                 self._execute(campaign_id, job, task, adapter, fault)
             if any(e["event_type"] == "CANDIDATE_FROZEN" for e in self.store.events(campaign_id)):
+                return self._close(campaign_id, task, adapter)
+            if any(
+                e["event_type"] == "DECISION" and e["payload"]["decision"]["action_id"] == "stop"
+                for e in self.store.events(campaign_id)
+            ):
                 return self._close(campaign_id, task, adapter)
             steps = 0
             while True:
@@ -449,11 +496,29 @@ class CampaignEngine:
                     self.store.set_status(campaign_id, "EXHAUSTED")
                     return "EXHAUSTED"
                 state = self.state(campaign_id, adapter)
-                decision = FixedPolicy().choose(state)
-                admit(decision, state)
-                action = next(
-                    a for a in state.available_actions if a.action_id == decision.action_id
-                )
+                choice = None
+                if runtime:
+                    try:
+                        choice = runtime.choose(campaign_id, task, state, fault=fault)
+                    except AgentNeedsReconciliation as exc:
+                        self.store.append(campaign_id, "AGENT_UNCERTAIN", {"reason": str(exc)})
+                        self.store.set_status(campaign_id, "NEEDS_RECONCILIATION")
+                        return "NEEDS_RECONCILIATION"
+                    except BudgetExceeded as exc:
+                        self.store.append(campaign_id, "BUDGET_EXHAUSTED", {"reason": str(exc)})
+                        self.store.set_status(campaign_id, "EXHAUSTED")
+                        return "EXHAUSTED"
+                    except AdmissionError as exc:
+                        self.store.append(campaign_id, "AGENT_FAILED", {"reason": str(exc)})
+                        self.store.set_status(campaign_id, "FAILED")
+                        return "FAILED"
+                    state, decision, action = choice.state, choice.decision, choice.action
+                else:
+                    decision = FixedPolicy().choose(state)
+                    admit(decision, state)
+                    action = next(
+                        a for a in state.available_actions if a.action_id == decision.action_id
+                    )
                 if action.split_id != task.split_policy.development_id:
                     raise AdmissionError("WRONG_SPLIT")
                 if action.action_type == "STOP":
@@ -463,6 +528,14 @@ class CampaignEngine:
                         {
                             "state": state.model_dump(mode="json"),
                             "decision": decision.model_dump(mode="json"),
+                            **(
+                                {
+                                    "agent_job_id": choice.job_id,
+                                    "research_turn_ref": self.store.artifacts.put(choice.turn),
+                                }
+                                if choice
+                                else {}
+                            ),
                         },
                     )
                     return self._close(campaign_id, task, adapter)
@@ -471,8 +544,42 @@ class CampaignEngine:
                     "state": state.model_dump(mode="json"),
                     "decision": decision.model_dump(mode="json"),
                     "action": action.model_dump(mode="json"),
-                    "roles": role_records(state, decision),
+                    "roles": [
+                        {
+                            "role": "director",
+                            "origin": "provider",
+                            "next_direction": choice.turn.next_direction,
+                            "evidence_refs": choice.turn.evidence_refs,
+                        },
+                        {
+                            "role": "scientist",
+                            "origin": "agent_proposed",
+                            "hypothesis": action.hypothesis.model_dump(mode="json"),
+                        },
+                        {
+                            "role": "designer",
+                            "origin": "agent_proposed",
+                            "design": choice.turn.experiment.model_dump(mode="json"),
+                        },
+                        {
+                            "role": "critic",
+                            "origin": "provider",
+                            "analysis_summary": choice.turn.analysis_summary,
+                            "evidence_refs": choice.turn.evidence_refs,
+                        },
+                    ]
+                    if choice
+                    else role_records(state, decision),
                     "world_id": manifest["world_id"],
+                    **(
+                        {
+                            "agent_job_id": choice.job_id,
+                            "agent_request_id": choice.request_id,
+                            "research_turn_ref": self.store.artifacts.put(choice.turn),
+                        }
+                        if choice
+                        else {}
+                    ),
                 }
                 try:
                     job_id = self.store.reserve(campaign_id, request, action.estimated_cost)

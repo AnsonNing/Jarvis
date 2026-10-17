@@ -250,6 +250,15 @@ class Store:
         with self.connect() as conn:
             return self._usage(conn, campaign_id)
 
+    def resource_totals(self, campaign_id: str) -> dict[str, dict[str, float]]:
+        totals = {"actual": Cost().dimensions(), "pending": Cost().dimensions()}
+        for job in self.jobs(campaign_id):
+            section = "actual" if job["actual"] else "pending"
+            cost = Cost.model_validate_json(job["actual"] or job["reservation"])
+            for key, value in cost.dimensions().items():
+                totals[section][key] += value
+        return totals
+
     def reserve(self, campaign_id: str, request: dict[str, Any], cost: Cost) -> str:
         manifest = self.manifest(campaign_id)
         limits = Budget.model_validate(manifest["task"]["budget"]).limits()
@@ -360,6 +369,49 @@ class Store:
                     "evaluation_ref": evaluation_ref,
                     "critique_ref": critique_ref,
                     "finding_ref": finding_ref,
+                },
+            )
+
+    def finish_agent_job(self, job_id: str, *, turn_ref: str | None, rejection: str | None) -> None:
+        """Settle an observed LLM completion without adding a numerical domain node."""
+        receipt = self.read_receipt(job_id)
+        if receipt is None or receipt.get("cost") is None:
+            raise IntegrityError("agent usage/completion unknown; reservation must remain pending")
+        cost = Cost.model_validate(receipt["cost"])
+        with self.transaction() as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                raise IntegrityError("unknown agent job")
+            if job["finalized"]:
+                return
+            request = self.artifacts.get(job["request_ref"])
+            if (
+                not request.get("agent_call")
+                or receipt["job_id"] != job_id
+                or receipt["request_ref"] != job["request_ref"]
+                or receipt["world_id"] != self.manifest(job["campaign_id"])["world_id"]
+            ):
+                raise IntegrityError("agent receipt/job identity mismatch")
+            ref = self.artifacts.put(receipt)
+            conn.execute(
+                "UPDATE jobs SET status=?,actual=?,receipt_ref=?,finalized=1 WHERE id=?",
+                (
+                    "REJECTED" if rejection else "SUCCEEDED",
+                    cost.model_dump_json(),
+                    ref,
+                    job_id,
+                ),
+            )
+            self._append(
+                conn,
+                job["campaign_id"],
+                "AGENT_COMPLETED",
+                {
+                    "job_id": job_id,
+                    "request_ref": job["request_ref"],
+                    "receipt_ref": ref,
+                    "turn_ref": turn_ref,
+                    "rejection": rejection,
                 },
             )
 

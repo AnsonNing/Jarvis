@@ -180,6 +180,9 @@ class HermesAdapter:
             "feature_slots": 91,
             "source_sha256": file_digest(self.source),
             "selected_policy": self.metadata["selected_policy"],
+            "fixed_thresholds": {
+                k: self.metadata["initial_cutoffs"][k] for k in ["t_cut", "c_risk_cut"]
+            },
             "documented_pair": documented,
             "readme_pair_matches_metadata": documented == pair,
             "source_and_model_hashes_verified": True,
@@ -362,9 +365,61 @@ class HermesAdapter:
             )
         return tuple(result)
 
+    def research_frontier(self, task: ResearchTask, state: ResearchState) -> tuple[ActionSpec, ...]:
+        """The LLM chooses experiment order/parameters after baseline admission."""
+        seen = {o.action_id for o in state.observations}
+        if not {"inspect", "baseline"} <= seen:
+            return tuple(a for a in self.frontier(task, state) if a.action_type != "STOP")
+        prototypes = {a.action_id: a for a in self.frontier(task, state)}
+        anchor = next(iter(prototypes.values()))
+        names = [n for n in ["attribution", "cancel_effect", "cost_stress"] if n not in seen]
+        names += ["conditional_analysis", "threshold_experiment", "stop"]
+        return tuple(
+            anchor.model_copy(
+                update={
+                    "action_id": name,
+                    "tool_id": "hermes." + name,
+                    "action_type": "STOP"
+                    if name == "stop"
+                    else "RUN_EXPERIMENT"
+                    if name == "threshold_experiment"
+                    else "DIAGNOSE",
+                    "estimated_cost": Cost()
+                    if name == "stop"
+                    else Cost(actions=1, tool_calls=1, compute_units=1, wall_seconds=30),
+                }
+            )
+            for name in names
+        )
+
+    def _candidate_metrics(self, frame: Any, kept: Any, cancelled: Any) -> dict[str, float]:
+        import numpy as np
+
+        part = frame.loc[kept]
+        daily = (
+            part.groupby("date").entry_pl.sum().reindex(sorted(frame.date.unique()), fill_value=0.0)
+        )
+        equity = np.r_[0.0, daily.cumsum().to_numpy()]
+        baseline = float(frame.loc[frame.kept, "entry_pl"].sum())
+        stats = {
+            "entry_pl": float(part.entry_pl.sum()),
+            "count": float(len(part)),
+            "cancelled": float(cancelled.sum()),
+            "baseline_entry_pl": baseline,
+            "entry_pl_difference": float(part.entry_pl.sum()) - baseline,
+            "mdd": float((equity - np.maximum.accumulate(equity)).min()),
+            "worst_day": float(daily.min()),
+        }
+        if len(part):
+            stats.update(pr=float(part.entry_pr.mean()), pl_per_trade=float(part.entry_pl.mean()))
+        return stats
+
     def execute(self, action: ActionSpec) -> Observation:
-        if action.arguments or action.tool_id != "hermes." + action.action_id:
+        from jarvis.researcher import validate_parameters
+
+        if action.tool_id != "hermes." + action.action_id:
             raise AdmissionError("Hermes accepts admitted diagnostic IDs only")
+        validate_parameters(action.action_id, action.arguments)
         if self._identity and digest(self.hashes()) != self._identity["dataset_identity"]:
             raise IntegrityError("Hermes inputs changed after admission")
         if action.action_id == "inspect":
@@ -385,6 +440,51 @@ class HermesAdapter:
                 limitations=tuple(self.inspect()["limitations"]),
             )
         frame = self._orders()
+        if action.action_id == "threshold_experiment":
+            import numpy as np
+
+            cutoff = float(self.metadata["initial_cutoffs"]["t_cut"]) + action.arguments.get(
+                "trading_cutoff_delta", 0.0
+            )
+            approved = frame.t_score > cutoff
+            potential = (
+                frame.potential_cancel
+                if action.arguments.get("cancel_mode", "baseline") == "baseline"
+                else np.zeros(len(frame), dtype=bool)
+            )
+            cancelled = approved & potential
+            kept = approved & ~potential
+            stats = self._candidate_metrics(frame, kept, cancelled)
+            stats.update(trading_cutoff=cutoff, approved=float(approved.sum()))
+            return Observation(
+                action_id=action.action_id,
+                result_origin="REPLAYED",
+                metrics=stats,
+                findings=("Controlled frozen-model comparison; candidate is not deployed",),
+                limitations=(
+                    "Previously exposed development period; repeated search can overfit",
+                    "Baseline cancellation assumptions retained; no new fill/acknowledgement simulation",
+                ),
+            )
+        if action.action_id == "conditional_analysis":
+            column = "date" if action.arguments["group_by"] == "day" else "product"
+            grouped = frame.loc[frame.kept].groupby(column).entry_pl.agg(["count", "sum"])
+            groups = [
+                {"group": str(index), "count": int(row["count"]), "entry_pl": float(row["sum"])}
+                for index, row in grouped.iterrows()
+            ]
+            return Observation(
+                action_id=action.action_id,
+                result_origin="REPLAYED",
+                findings=(
+                    json.dumps(
+                        {"group_by": action.arguments["group_by"], "groups": groups}, sort_keys=True
+                    ),
+                ),
+                limitations=(
+                    "Conditional association in saved outcomes, not causal or independent validation",
+                ),
+            )
         if action.action_id == "attribution":
             kept = frame.loc[frame.kept]
             daily = kept.groupby("date").entry_pl.sum()
@@ -414,7 +514,11 @@ class HermesAdapter:
                         "additional_cost": cost,
                         "adjusted_entry_pl": float(kept.entry_pl.sum() - cost * len(kept)),
                     }
-                    for cost in (0.0, 0.01, 0.05, 0.1)
+                    for cost in (
+                        (action.arguments["additional_cost"],)
+                        if "additional_cost" in action.arguments
+                        else (0.0, 0.01, 0.05, 0.1)
+                    )
                 ],
                 "fee_semantics": "Actual fee/slippage inclusion is unknown; this is arithmetic sensitivity",
             }
