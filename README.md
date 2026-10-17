@@ -2,9 +2,59 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is a planned domain-extensible research platform. Its first target domain is quantitative/high-frequency trading research; future domains must be introduced through explicit adapters, not hard-coded into the research engine.
+Jarvis is an executable, domain-extensible research platform. Version 0.1 provides a durable local research kernel, a deterministic adaptive synthetic campaign, and an opt-in adapter for existing local Hermes data and model artifacts. Domain details stay in adapters.
 
-Jarvis is **not** a live trading bot, not a trading engine, and not currently a completed implementation. The repository initially contains an implementation-ready **system specification for local Codex**. The user will provide data schemas, strategy details, training executors and backtesting interfaces later.
+The active researcher is **deterministic Q0 with structured logical roles**. A provider-neutral protocol and mock provider exist; live LLM research, generated-code execution, capability transfer and Dream-RSI policy improvement are still future work. Hermes operations reproduce and diagnose existing artifacts; they do not establish a new strategy improvement or perform live trading.
+
+## Run locally
+
+```sh
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements-lock.txt
+python -m pip install --no-deps -e .
+pytest -q
+jarvis task validate examples/research_task.example.yaml
+jarvis campaign start examples/research_task.example.yaml --max-steps 2
+# Use the actual campaign ID printed above:
+jarvis campaign resume <campaign-id>
+jarvis campaign report <campaign-id>
+jarvis history verify <campaign-id>
+jarvis rsi replay <campaign-id>
+```
+
+The campaign records negative experiments, changes direction based on observed
+results, freezes its candidate, runs a separate synthetic locked evaluation and
+produces evidence-linked reports. Receipts survive an abrupt coordinator exit;
+uncertain started jobs require reconciliation. The default private store is
+`.jarvis/`; use `jarvis --store <private-directory> ...` to choose another.
+
+## Use existing Hermes data
+
+Set `HERMES_ROOT` and `HERMES_PYTHON` privately to the provided repository and its
+Python environment. Raw data, models, local paths and numerical reports stay local.
+
+```sh
+jarvis hermes inspect --root "$HERMES_ROOT" --side long
+jarvis hermes start --root "$HERMES_ROOT" --side short
+# If saved order decisions do not match the current model metadata, materialize
+# frozen-model predictions into a NEW private folder, then use it explicitly:
+jarvis hermes materialize --root "$HERMES_ROOT" --side long \
+  --python "$HERMES_PYTHON" --output .jarvis/materialized-long
+jarvis hermes start --root "$HERMES_ROOT" --side long \
+  --ledger-root .jarvis/materialized-long
+```
+
+The default reader never opens model pickles. The explicit materialization worker
+uses trusted local source/models, disables model fitting, redirects loader writes,
+verifies checksums and reproduces the declared baseline. It preserves upstream
+files. Existing exposed evaluation data is tagged development/replay; formal
+strategy validation reports NOT_RUN. See the
+[integration receipt](docs/implementation/HERMES-local-integration.md).
+
+Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
+and [release acceptance](docs/implementation/RELEASE-0.1.md). The documents below
+remain the broader P0–P5 design, not a claim that every planned capability exists.
 
 ## Mission / 願景
 
@@ -20,9 +70,9 @@ Three separate improvement loops:
 
 **Inside Jarvis:** research orchestration, agent decision protocols, structured evidence, capability registry, policy-driven experiment selection, history/replay, policy evaluation, resource accounting, and reporting.
 
-**Outside Jarvis for now:** proprietary market data, strategy logic, training pipelines, backtest engines, broker/exchange connections, real trading deployment. They connect later through versioned adapters and may remain in local/private infrastructure.
+**Outside Jarvis:** proprietary market data and strategy source, training pipelines, event-backtest engines, broker/exchange connections and trading deployment. The current adapter reads declared local artifacts and optionally invokes trusted frozen-model inference. Data, weights and private source remain in their original local infrastructure.
 
-No live orders or access to production credentials is permitted. Generated research code executes only in isolated development workspaces.
+No live orders or access to production credentials is permitted. Generated research code execution is disabled until a real isolation boundary is implemented.
 
 ## Read first
 
