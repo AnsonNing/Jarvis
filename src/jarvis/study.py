@@ -197,7 +197,9 @@ def verify_canary(store: Store, ref: str) -> dict[str, Any]:
                     "family": r["family"],
                     "success": r[arm]["success"],
                     "cost": r[arm]["cost"],
-                    "status": "COMPLETE",
+                    "status": "COMPLETE"
+                    if r[arm]["execution_status"] == "SUCCEEDED"
+                    else r[arm]["execution_status"],
                 }
                 for r in pairs
             ]

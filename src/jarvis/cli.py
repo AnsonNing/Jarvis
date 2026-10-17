@@ -85,11 +85,11 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--format", choices=["json", "markdown"], default="markdown")
     history = commands.add_parser("history").add_subparsers(dest="operation", required=True)
     history.add_parser("verify").add_argument("campaign_id")
-    replay = (
-        commands.add_parser("rsi")
-        .add_subparsers(dest="operation", required=True)
-        .add_parser("replay")
-    )
+    rsi = commands.add_parser("rsi").add_subparsers(dest="operation", required=True)
+    replay = rsi.add_parser("replay")
+    from jarvis.dream_cli import add_commands
+
+    add_commands(rsi)
     replay.add_argument("campaign_id")
     replay.add_argument("--policy", type=Path)
     hermes = commands.add_parser("hermes").add_subparsers(dest="operation", required=True)
@@ -122,10 +122,32 @@ def run(args: argparse.Namespace) -> None:
         emit({"status": "VALID", "task_identity": task.identity, "domain": task.domain})
         return
     if args.command == "schema":
-        from jarvis import agents, contracts, policy, researcher
+        from jarvis import (
+            agents,
+            contracts,
+            discovery,
+            dream,
+            exploration,
+            policy,
+            pool,
+            researcher,
+            search_space,
+            suite,
+        )
 
         args.output.mkdir(parents=True, exist_ok=True)
-        for module in [contracts, agents, policy, researcher]:
+        for module in [
+            contracts,
+            agents,
+            policy,
+            researcher,
+            discovery,
+            dream,
+            exploration,
+            pool,
+            search_space,
+            suite,
+        ]:
             for name in dir(module):
                 model = getattr(module, name)
                 if isinstance(model, type) and issubclass(model, contracts.Record):
@@ -167,6 +189,15 @@ def run(args: argparse.Namespace) -> None:
         emit(verify(store, args.campaign_id))
         return
     if args.command == "rsi":
+        if args.operation != "replay":
+            from jarvis.dream_cli import run as dream_run
+
+            result = dream_run(store, args)
+            if isinstance(result, str):
+                print(result)
+            else:
+                emit(result)
+            return
         from jarvis.policy import FixedPolicy, PolicySpec
         from jarvis.replay import replay
 

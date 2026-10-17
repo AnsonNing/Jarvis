@@ -23,3 +23,5 @@ jobs:
       - run: pytest -q
       - run: jarvis task validate examples/research_task.example.yaml
       - run: jarvis --store /tmp/jarvis-ci campaign start examples/research_task.example.yaml
+      - run: jarvis --store /tmp/jarvis-dream-ci rsi study
+      - run: jarvis --store /tmp/jarvis-space-ci rsi space --spec examples/hermes_search_space.example.yaml

@@ -65,6 +65,9 @@ class HistoryPool(Record):
 
 def verify_pool(store: Store, ref: str) -> HistoryPool:
     pool = HistoryPool.model_validate(store.artifacts.get(ref))
+    sealed = [e for e in store.events(pool.collection_id) if e["event_type"] == "POOL_SEALED"]
+    if len(sealed) != 1 or sealed[0]["payload"]["pool_ref"] != ref:
+        raise IntegrityError("pool is not the canonical sealed collection")
     expected = {
         (cohort, f.identity)
         for cohort in ("development", "heldout")
@@ -141,7 +144,7 @@ class PoolBuilder:
                 collection_id=collection,
             )
             ref = self.store.artifacts.put(pool)
-            verify_pool(self.store, ref)
             self.store.append(collection, "POOL_SEALED", {"pool_ref": ref})
+            verify_pool(self.store, ref)
             self.store.set_status(collection, "CLOSED")
             return ref

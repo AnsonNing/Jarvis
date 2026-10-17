@@ -1,0 +1,29 @@
+schema_version: 1
+kind: ResearchSearchSpace
+axes:
+- schema_version: 1
+  name: take_profit_bps
+  values:
+  - 10.0
+  - 20.0
+  - 40.0
+- schema_version: 1
+  name: stop_loss_bps
+  values:
+  - 5.0
+  - 10.0
+  - 20.0
+- schema_version: 1
+  name: cancel_mode
+  values:
+  - baseline
+  - disabled
+- schema_version: 1
+  name: trading_cutoff_delta
+  values:
+  - -0.0001
+  - 0.0
+  - 0.0001
+max_candidates: 128
+comparison: factorial
+origin: declared_fixture

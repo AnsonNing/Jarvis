@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, ValidationError
 
 from jarvis.branch_replay import aggregate, replay_tree
-from jarvis.campaign import source_identity
+from jarvis.campaign import code_provenance, source_identity
 from jarvis.contracts import Cost, IntegrityError, JarvisError, Record
 from jarvis.discovery import Collector
 from jarvis.exploration import ExplorationPolicy, fixture_proposals, incumbent
@@ -168,6 +168,7 @@ class DreamEngine:
                 "provider_identity": descriptor,
                 "agent_config": config.model_dump(mode="json"),
                 "source_identity": source_identity(),
+                "code_provenance": code_provenance(),
             }
         )
 
@@ -196,7 +197,7 @@ class DreamEngine:
                 job = jobs[0]
             else:
                 prompt = (
-                    "You are a restricted research-exploration Policy Developer. Propose 2 to 5 distinct DSL policies using only this development evidence. Improve research action ordering under the fixed budget. Never generate code, call tools, read files, use family/world IDs, change the target, evaluator or budget. The incumbent is added by the kernel. Mark every proposal agent_proposed. Return the required JSON schema.\n"
+                    "You are a restricted research-exploration Policy Developer. Propose 2 to 5 distinct DSL policies using only this development evidence. Improve research action ordering under the fixed budget. Never generate code, call tools, read files, use family/world IDs, change the target, evaluator or budget. The incumbent is added by the kernel. Mark every proposal agent_proposed. Write rationale in Traditional Chinese. Return the required JSON schema.\n"
                     + json.dumps(
                         {"development_ref": summary_ref, "input": summary}, ensure_ascii=False
                     )
@@ -261,6 +262,8 @@ class DreamEngine:
                     p.origin != "agent_proposed" for p in batch.proposals
                 ):
                     raise ValueError("proposal development scope/origin mismatch")
+                if receipt["cost"]["llm_tokens"] > manifest["task"]["budget"]["max_llm_tokens"]:
+                    raise ValueError("actual developer usage exceeded the sealed budget")
                 proposals = batch.proposals
             except (ValueError, ValidationError) as exc:
                 rejected = str(exc)[:1000]
@@ -317,6 +320,7 @@ class DreamEngine:
                     "success": result["success"],
                     "cost": result["cost"],
                     "value": result["value"],
+                    "execution_status": result["execution_status"],
                 }
             rows.append(row)
         summaries = {}
@@ -327,7 +331,9 @@ class DreamEngine:
                     "family": r["family"],
                     "success": r[arm]["success"],
                     "cost": r[arm]["cost"],
-                    "status": "COMPLETE",
+                    "status": "COMPLETE"
+                    if r[arm]["execution_status"] == "SUCCEEDED"
+                    else r[arm]["execution_status"],
                 }
                 for r in rows
             ]
@@ -608,7 +614,9 @@ def verify_round(store: Store, round_id: str) -> dict[str, Any]:
                         "family": r["family"],
                         "success": r[arm]["success"],
                         "cost": r[arm]["cost"],
-                        "status": "COMPLETE",
+                        "status": "COMPLETE"
+                        if r[arm]["execution_status"] == "SUCCEEDED"
+                        else r[arm]["execution_status"],
                     }
                     for r in report["fresh"]["pairs"]
                 ]

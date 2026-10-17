@@ -2,9 +2,9 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.2 adds a real structured LLM researcher to the durable local kernel and Hermes adapter. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.3 adds a complete synthetic Dream-RSI study: branching histories, restricted policy proposals, independent validation, fresh paired campaigns, policy versions and rollback. Domain details stay in adapters.
 
-Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Generated-code execution, capability transfer and Dream-RSI policy improvement remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
+Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
 ## Run locally
 
@@ -99,6 +99,60 @@ claim an unrecorded parameter design just because its tool ID matches.
 Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
 and [release acceptance](docs/implementation/RELEASE-0.2.md). The documents below
 remain the broader P0–P5 design, not a claim that every planned capability exists.
+
+## Run the complete synthetic Dream-RSI loop
+
+```sh
+# Three recorded rounds plus an unseen condition-shift canary. No LLM required.
+jarvis --store .jarvis/dream-fixture rsi study
+# Real policy developer; one bounded, paid request per round, existing CLI login.
+jarvis --store .jarvis/dream-codex rsi study --developer codex
+# Optional: --codex-executable "$JARVIS_CODEX_CLI" --model <supported-model>
+jarvis --store .jarvis/dream-codex rsi report <run-id>
+jarvis --store .jarvis/dream-codex rsi verify <run-id>
+jarvis --store .jarvis/dream-codex rsi resume <run-id>
+
+# Individual work packages and exact coverage inspection:
+jarvis --store .jarvis/dream-manual rsi collect
+jarvis --store .jarvis/dream-manual rsi coverage --pool <pool-ref>
+jarvis --store .jarvis/dream-manual rsi dream --pool <pool-ref>
+jarvis --store .jarvis/dream-manual rsi replay-tree --tree <tree-ref> --policy <policy.yaml>
+```
+
+The default study first preserves a coverage failure, then executes new collections
+to fill missing branches, selects a single development finalist and validates it
+on disjoint families and new online paired campaigns. A third round checks for
+further development gains. An unseen spurious-proxy canary can regress and roll
+back the policy that passed earlier gates. A study may legitimately retain Q0.
+
+The full pool has twelve realized trees from six mathematical families. Fresh
+families are separately declared before proposals. Each branch receives only its
+ancestors, pays its recorded cost before reveal, and has an immutable receipt.
+Unknown branches receive no score. Candidate generation sees development-only
+observations; replay performs zero domain/provider/evaluator calls. Heldout and
+fresh families are one-shot across the local store, including renamed pools.
+Additional independent families are needed for further promotion after exposure.
+
+Policy origin distinguishes declared fixture enumeration from real LLM proposals.
+Both arms use the same tools and empty L2 memory. Reports separate original history
+collection, historical replay costs, actual developer tokens, pending reservations,
+fresh execution, target attainment and rollback. This is synthetic engineering
+acceptance; it does not demonstrate general or financial research improvement.
+
+## Explore domain settings
+
+```sh
+jarvis rsi space
+jarvis rsi space --spec examples/hermes_search_space.example.yaml
+```
+
+The finite design space supports take-profit/stop-loss basis points, Trading
+cutoff deltas, cancellation mode and bounded cancellation conditions, as either
+single-axis or factorial comparisons. Example values are declared fixtures.
+Current Hermes replay supports its existing one-variable threshold/cancel tools.
+Price-path exits and new cancellation logic require explicit backend capabilities;
+their candidates return REQUIRES_CAPABILITY and NOT_RUN until those are supplied.
+See [experiment-space contract](docs/15_EXPERIMENT_SPACE.md).
 
 ## Mission / 願景
 

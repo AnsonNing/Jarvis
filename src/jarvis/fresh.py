@@ -4,13 +4,21 @@ import time
 from typing import Any
 
 from jarvis.campaign import source_identity
-from jarvis.contracts import Cost, IntegrityError, JarvisError
+from jarvis.contracts import Cost, IntegrityError, JarvisError, ResearchState
 from jarvis.discovery import Collector, after_state, fits, root_state
 from jarvis.exploration import ExplorationPolicy, choose
 from jarvis.identity import digest
 from jarvis.policy import admit
 from jarvis.storage import Store
 from jarvis.suite import SuiteAdapter
+
+
+def execution_status(state: ResearchState) -> str:
+    if any(o.status == "FAILED" for o in state.observations):
+        return "FAILED"
+    return (
+        "NEEDS_INPUT" if any(o.status == "NEEDS_INPUT" for o in state.observations) else "SUCCEEDED"
+    )
 
 
 class FreshRunner:
@@ -66,6 +74,8 @@ class FreshRunner:
                     best = (
                         max(scored, key=lambda o: o.metrics["objective_score"]) if scored else None
                     )
+                    if execution_status(state) != "SUCCEEDED":
+                        best = None
                     self.store.append(
                         campaign,
                         "FRESH_FROZEN",
@@ -154,6 +164,11 @@ class FreshRunner:
             formal_ref = result_events[0]["payload"]["receipt_ref"] if result_events else None
             formal = self.store.artifacts.get(formal_ref) if formal_ref else None
             value = formal["observation"]["metrics"].get("objective_score") if formal else None
+            status = execution_status(
+                ResearchState.model_validate(
+                    self.store.artifacts.get(frozen["payload"]["state_ref"])
+                )
+            )
             result = {
                 "kind": "FreshPolicyResult",
                 "scope": "FRESH_SYNTHETIC_ONLY",
@@ -163,7 +178,17 @@ class FreshRunner:
                 "candidate": candidate,
                 "locked_receipt_ref": formal_ref,
                 "value": value,
-                "success": bool(value is not None and value >= 0.9),
+                "success": bool(value is not None and value >= 0.9)
+                if status == "SUCCEEDED"
+                else None,
+                "execution_status": status,
+                "outcome": "RESEARCH_POSITIVE"
+                if value is not None and value >= 0.9
+                else "RESEARCH_NEGATIVE"
+                if status == "SUCCEEDED"
+                else "REQUIRES_INPUT"
+                if status == "NEEDS_INPUT"
+                else "INFRASTRUCTURE_INTERRUPTED",
                 "formal_status": "EVALUATED" if formal else "NOT_RUN",
                 "cost": self.store.resource_totals(campaign)["actual"],
             }
@@ -230,6 +255,8 @@ def verify_fresh(store: Store, ref: str) -> dict[str, Any]:
                 if scored
                 else None
             )
+            if execution_status(state) != "SUCCEEDED":
+                best = None
             if best != payload["candidate"] or best != result["candidate"]:
                 raise IntegrityError("fresh best candidate mismatch")
             frozen = event
@@ -266,7 +293,14 @@ def verify_fresh(store: Store, ref: str) -> dict[str, Any]:
         ):
             raise IntegrityError("fresh settled receipt mismatch")
     value = formal["observation"]["metrics"].get("objective_score") if formal else None
-    if result["value"] != value or result["success"] != bool(value is not None and value >= 0.9):
+    expected_success = (
+        bool(value is not None and value >= 0.9) if execution_status(state) == "SUCCEEDED" else None
+    )
+    if (
+        result["value"] != value
+        or result["success"] != expected_success
+        or result["execution_status"] != execution_status(state)
+    ):
         raise IntegrityError("fresh outcome differs from locked evidence")
     if digest(result) != ref:
         raise IntegrityError("invalid fresh result reference")

@@ -133,3 +133,45 @@ def test_policy_developer_only_receives_development_and_actual_usage(pool):
     assert not any(report["dreaming_usage"]["pending"].values())
     pool_value = verify_pool(store, ref)
     assert development_summary(store, pool_value, incumbent())["scope"] == "development_only"
+
+
+@pytest.mark.parametrize(
+    "family,outcome",
+    [
+        ("missing", "REQUIRES_INPUT"),
+        ("crash", "INFRASTRUCTURE_INTERRUPTED"),
+        ("negative", "RESEARCH_NEGATIVE"),
+    ],
+)
+def test_missing_and_infrastructure_are_not_scientific_negative(tmp_path, family, outcome):
+    store = Store(tmp_path)
+    cid = Collector(store).create(Fixture(family=family, variant=0), policy=incumbent())
+    result = verify_fresh(store, FreshRunner(store).run(cid))
+    assert result["outcome"] == outcome
+    if family != "negative":
+        assert result["success"] is None
+        assert result["formal_status"] == "NOT_RUN"
+
+
+def test_unknown_developer_usage_is_pending_and_never_retried(pool):
+    store, ref = pool
+
+    class Broken:
+        calls = 0
+
+        def identity(self):
+            return {"provider": "test-unknown"}
+
+        def complete(self, *args):
+            self.calls += 1
+            return {"answer": None, "cost": None, "usage": None, "error": "interrupted"}
+
+    provider = Broken()
+    engine = DreamEngine(store, provider)
+    cid = engine.create(ref, developer="codex")
+    for _ in range(2):
+        with pytest.raises(JarvisError, match="usage unknown"):
+            engine.run(cid)
+    assert provider.calls == 1
+    assert store.resource_totals(cid)["actual"]["llm_tokens"] == 0
+    assert store.resource_totals(cid)["pending"]["llm_tokens"] > 0
