@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+.DS_Store
+# All local/private inputs, evidence, configs, reports and generated candidates.
+.jarvis/
+local/
+runs/
+*.sqlite*
+*.parquet
+*.pkl
+*.hpp
+.env
+.env.*
+!.env.example
