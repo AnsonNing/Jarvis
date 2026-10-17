@@ -40,8 +40,9 @@ proposals, with full raw research artifacts retained locally. No private paths,
 raw orders, datasets, model files or authentication are published. Public CI
 uses fixtures only. Codex is explicitly opted in with `--agent codex`.
 
-Remaining acceptance: complete real-model Hermes campaigns, capture their actual
-adaptation and resource receipts, and verify the final published commit in CI.
-Those results will be recorded separately after execution. Arbitrary code
+Subsequent acceptance: both complete real-model Hermes campaigns and their
+adaptation, resources, history verification and zero-call replay are recorded in
+[RELEASE-0.2.md](RELEASE-0.2.md), together with later regression hardening. The
+72-test count above is the original implementation checkpoint. Arbitrary code
 generation, model training, external event backtests, pristine strategy tests,
 capability transfer and Dream-RSI policy promotion remain out of this milestone.

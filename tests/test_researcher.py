@@ -103,6 +103,15 @@ def test_context_is_bounded_and_schema_closed(state, task):
     assert "--" not in json.dumps(schema)
 
 
+def test_per_request_schema_binds_authorized_ids_and_evidence(state):
+    schema = structured_schema(state, "req-bound")
+    assert schema["properties"]["request_id"]["enum"] == ["req-bound"]
+    assert schema["properties"]["state_hash"]["enum"] == [state.identity]
+    assert schema["$defs"]["ExperimentDesign"]["properties"]["template_id"]["enum"] == ["inspect"]
+    assert schema["properties"]["evidence_refs"]["maxItems"] == 0
+    assert schema["$defs"]["Hypothesis"]["properties"]["origin"]["enum"] == ["agent_proposed"]
+
+
 def fake_cli(tmp_path, mode="valid"):
     path = tmp_path / "fake-codex"
     body = """

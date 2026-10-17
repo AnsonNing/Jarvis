@@ -167,7 +167,13 @@ class SyntheticAdapter:
 
     def formal(self, candidate: str) -> Observation:
         # Held-out fixture outcomes are opened only after a durable freeze event.
-        scores = {"inspect": 0.39, "capacity": 0.70, "regularize": 0.68, "refine": 0.76}
+        scores = {
+            "inspect": 0.39,
+            "capacity": 0.70,
+            "regularize": 0.68,
+            "refine": 0.76,
+            "unknown": 0.43,
+        }
         if self.world_ref == "synthetic-negative-v1":
             scores = {key: 0.30 for key in scores}
             scores["inspect"] = 0.39

@@ -245,7 +245,9 @@ def prompt_matches(prompt: str, context: dict[str, Any]) -> bool:
         return False
 
 
-def structured_schema() -> dict[str, Any]:
+def structured_schema(
+    state: ResearchState | None = None, request_id: str | None = None
+) -> dict[str, Any]:
     """Strict structured output: every object property is present, nullable where needed."""
     schema = ResearchTurn.model_json_schema()
 
@@ -262,4 +264,20 @@ def structured_schema() -> dict[str, Any]:
                 visit(child)
 
     visit(schema)
+    if state is not None:
+        schema["properties"]["state_hash"]["enum"] = [state.identity]
+        if request_id is not None:
+            schema["properties"]["request_id"]["enum"] = [request_id]
+        schema["$defs"]["ExperimentDesign"]["properties"]["template_id"]["enum"] = [
+            a.action_id for a in state.available_actions
+        ]
+        schema["$defs"]["Hypothesis"]["properties"]["origin"]["enum"] = ["agent_proposed"]
+        for refs in [
+            schema["properties"]["evidence_refs"],
+            schema["$defs"]["Hypothesis"]["properties"]["evidence_refs"],
+        ]:
+            if state.visible_evidence_ids:
+                refs["items"]["enum"] = list(state.visible_evidence_ids)
+            else:
+                refs["maxItems"] = 0
     return schema

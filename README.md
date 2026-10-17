@@ -2,9 +2,9 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.1 provides a durable local research kernel, a deterministic adaptive synthetic campaign, and an opt-in adapter for existing local Hermes data and model artifacts. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.2 adds a real structured LLM researcher to the durable local kernel and Hermes adapter. Domain details stay in adapters.
 
-The active researcher is **deterministic Q0 with structured logical roles**. A provider-neutral protocol and mock provider exist; live LLM research, generated-code execution, capability transfer and Dream-RSI policy improvement are still future work. Hermes operations reproduce and diagnose existing artifacts; they do not establish a new strategy improvement or perform live trading.
+Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Generated-code execution, capability transfer and Dream-RSI policy improvement remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
 ## Run locally
 
@@ -52,8 +52,52 @@ files. Existing exposed evaluation data is tagged development/replay; formal
 strategy validation reports NOT_RUN. See the
 [integration receipt](docs/implementation/HERMES-local-integration.md).
 
+## Run the real LLM researcher
+
+Use the locally installed Codex CLI with its existing login. Keep executable paths,
+credentials and run outputs private. The default model is selected by the installed
+CLI; pass `--model` to pin an explicit supported model. Jarvis records the executable
+version/hash and declared model option. The observed exec JSON reports token usage
+but does not identify the resolved default model, so Jarvis does not invent it.
+
+```sh
+jarvis hermes start --root "$HERMES_ROOT" --side long \
+  --ledger-root .jarvis/materialized-long --agent codex \
+  --max-llm-calls 8 --llm-token-budget 200000 \
+  --goal 'Diagnose the current policy, propose falsifiable hypotheses, run controlled comparisons, and revise after each observed result.'
+# Optional: --codex-executable "$JARVIS_CODEX_CLI" --model <supported-model>
+jarvis campaign report <campaign-id>
+jarvis history verify <campaign-id>
+jarvis rsi replay <campaign-id>
+```
+
+The LLM must first inspect and reproduce the baseline. It then chooses diagnostics
+or designs a frozen-model comparison, with a one-variable threshold/cancel change,
+day/product grouping, or declared extra-cost sensitivity. Every hypothesis has a
+mechanism, falsification rule, controls, expected observation and criterion. Later
+turns receive the actual measured results and prior proposals; the model chooses
+continue, branch, stop or request input. Identical repeated experiments are denied.
+
+Calls are reserved before dispatch and settled with observed input/output tokens.
+Rejected responses remain charged; at most one schema/admission repair is allowed.
+Unknown completion or missing usage stops for reconciliation and retains a pending
+reservation. Reports distinguish measured consumption from pending reservations.
+Per-call token reservations are estimates: the CLI has no verified hard server-side
+output cap, so observed overruns are retained and stop further dispatch. Provider
+timeouts and maximum call counts bound the run.
+
+Codex runs ephemerally with user configuration ignored, read-only permissions,
+and shell/plugins/apps/memory/multi-agent/hooks/web disabled. Provider prompts use
+bounded aggregate development evidence, with raw inputs/models retained locally.
+Provider tool attempts are rejected; the LLM cannot execute a proposed command or
+edit the fixed evaluator. CI uses fixtures and no saved account authentication.
+
+Default replay of an LLM campaign follows recorded decisions/designs and charges
+their historical costs with zero new LLM/tool calls. Alternative policies cannot
+claim an unrecorded parameter design just because its tool ID matches.
+
 Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
-and [release acceptance](docs/implementation/RELEASE-0.1.md). The documents below
+and [release acceptance](docs/implementation/RELEASE-0.2.md). The documents below
 remain the broader P0–P5 design, not a claim that every planned capability exists.
 
 ## Mission / 願景

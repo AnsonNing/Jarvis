@@ -201,3 +201,31 @@ def test_recorded_agent_replay_uses_no_provider(tmp_path, task, monkeypatch):
     assert value["external_calls"] == 0
     assert value["policy_mode"] == "recorded_llm_decisions"
     assert value["cost"]["llm_tokens"] == store.usage(campaign)["llm_tokens"]
+
+
+@pytest.mark.parametrize("world", ["synthetic-world-v1", "synthetic-negative-v1"])
+def test_llm_explores_previously_unrecorded_candidate_and_can_formally_close(tmp_path, task, world):
+    class Explorer(ScriptedProvider):
+        def complete(self, prompt, schema, directory):
+            result = super().complete(prompt, schema, directory)
+            context = self.calls[-1]
+            seen = {o["action_id"] for o in context["observations"]}
+            if seen:
+                result["answer"]["experiment"]["template_id"] = (
+                    "stop" if "unknown" in seen else "unknown"
+                )
+                result["answer"]["next_direction"] = "STOP" if "unknown" in seen else "BRANCH"
+            return result
+
+    provider = Explorer()
+    store, engine = setup_engine(tmp_path, provider)
+    campaign = engine.create(
+        task.model_copy(update={"world_ref": world}), researcher=AgentConfig(reserve_tokens=1000)
+    )
+    assert engine.run(campaign) == "CLOSED"
+    value = report(store, campaign)
+    assert [e["action"] for e in value["experiments"]] == ["inspect", "unknown"]
+    assert value["formal"]["evaluation"]["action_id"] == "unknown"
+    assert value["formal"]["evaluation"]["acceptance"] == (
+        "PASS" if world == "synthetic-world-v1" else "FAIL"
+    )

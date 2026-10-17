@@ -241,7 +241,7 @@ class AgentRuntime:
                 "request_id": context["request_id"],
                 "context": context,
                 "prompt": render_prompt(context),
-                "output_schema": structured_schema(),
+                "output_schema": structured_schema(state, context["request_id"]),
             }
             job_id = self.store.reserve(
                 campaign_id,
