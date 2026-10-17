@@ -14,7 +14,7 @@ Date: 2026-10-18. Release: 0.2.0. Real LLM research is now available through exp
 | P1 generated candidate builder | NOT_STARTED | Arbitrary generated-code execution awaits a separately verified isolation boundary |
 | P2 memory/capability RSI | NOT_STARTED | Findings are sealed in campaign histories; no cross-campaign retrieval or utility/transfer validation |
 | P3 cross-task corpus | NOT_STARTED | No independent multi-family corpus or A/B transfer study |
-| P4 Dream-RSI | NOT_STARTED | Exact recorded-path replay primitive verified; no dreaming/policy promotion or efficacy claim |
+| P3/P4 synthetic branching and Dream core | IN_PROGRESS | Twelve-tree corpus, closed policy DSL, independent/fresh gates and multi-round rollback pass API tests; CLI and committed-source acceptance pending. See P3-P4-synthetic-core.md |
 | P5 Hermes integration | VERIFIED_WITH_LIMITATIONS | Real local inputs, baseline reproduction, isolated inference, LLM-designed frozen-model comparisons and grouped diagnostics; no training/event-backtester integration |
 
 Validation: `pytest -q`, Ruff lint/format, mypy, task CLI and complete local

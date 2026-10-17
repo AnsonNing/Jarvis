@@ -111,6 +111,11 @@ class Store:
                     campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id),
                     command TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS policy_family_use (
+                    family_key TEXT PRIMARY KEY,
+                    purpose TEXT NOT NULL,
+                    owner_id TEXT NOT NULL REFERENCES campaigns(id)
+                );
             """)
         os.chmod(self.db_path, 0o600)
 
@@ -424,6 +429,68 @@ class Store:
                     "rejection": rejection,
                 },
             )
+
+    def finish_auxiliary_job(self, job_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        """Atomically settle a typed non-development operation and its evidence event."""
+        receipt = self.read_receipt(job_id)
+        if receipt is None or receipt.get("cost") is None:
+            raise IntegrityError("auxiliary completion/usage unknown; retain reservation")
+        cost = Cost.model_validate(receipt["cost"])
+        with self.transaction() as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                raise IntegrityError("unknown auxiliary job")
+            if job["finalized"]:
+                return
+            if (
+                receipt["job_id"] != job_id
+                or receipt["request_ref"] != job["request_ref"]
+                or receipt["world_id"] != self.manifest(job["campaign_id"])["world_id"]
+            ):
+                raise IntegrityError("auxiliary receipt identity mismatch")
+            ref = self.artifacts.put(receipt)
+            conn.execute(
+                "UPDATE jobs SET status='SUCCEEDED',actual=?,receipt_ref=?,finalized=1 WHERE id=?",
+                (cost.model_dump_json(), ref, job_id),
+            )
+            self._append(
+                conn,
+                job["campaign_id"],
+                event_type,
+                {
+                    **payload,
+                    "job_id": job_id,
+                    "request_ref": job["request_ref"],
+                    "receipt_ref": ref,
+                },
+            )
+
+    def claim_policy_families(self, owner: str, families: list[str], purpose: str) -> bool:
+        """One-shot validation families; renaming a pool cannot reset exposure."""
+        if purpose not in {"development", "heldout", "fresh", "canary"}:
+            raise JarvisError("unknown policy family access purpose")
+        with self.transaction() as conn:
+            rows = {
+                row["family_key"]: dict(row)
+                for row in conn.execute("SELECT * FROM policy_family_use")
+            }
+            if purpose != "development" and any(
+                key in rows and (rows[key]["owner_id"] != owner or rows[key]["purpose"] != purpose)
+                for key in families
+            ):
+                return False
+            new = []
+            for key in sorted(set(families)):
+                if key not in rows:
+                    conn.execute(
+                        "INSERT INTO policy_family_use VALUES(?,?,?)", (key, purpose, owner)
+                    )
+                    new.append(key)
+            if new:
+                self._append(
+                    conn, owner, "POLICY_FAMILIES_CLAIMED", {"families": new, "purpose": purpose}
+                )
+        return True
 
     def control(self, campaign_id: str, command: str) -> None:
         self.manifest(campaign_id)
