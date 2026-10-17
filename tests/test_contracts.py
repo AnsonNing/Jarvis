@@ -19,6 +19,8 @@ def test_example_roundtrip():
     "data",
     [
         {"schema_version": 2},
+        {"schema_version": True},
+        {"schema_version": 1.0},
         {"oops": 1},
         {"max_actions": -1},
         {"max_actions": True},

@@ -20,6 +20,14 @@ def utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class ArtifactStore:
     def __init__(self, root: Path):
         self.root = root
@@ -44,6 +52,7 @@ class ArtifactStore:
                 os.fsync(f.fileno())
             try:
                 os.link(temp, path)
+                sync_directory(path.parent)
             except FileExistsError:
                 pass
         finally:
@@ -293,6 +302,7 @@ class Store:
         path = self.receipt_path(job_id)
         try:
             os.link(self.artifacts.path(ref), path)
+            sync_directory(path.parent)
         except FileExistsError:
             if self.read_receipt(job_id) != receipt:
                 raise IntegrityError("conflicting immutable job receipt") from None
@@ -305,7 +315,14 @@ class Store:
         self.artifacts.get(digest(value))
         return value
 
-    def finish_job(self, job_id: str, evaluation_ref: str) -> None:
+    def finish_job(
+        self,
+        job_id: str,
+        evaluation_ref: str,
+        *,
+        critique_ref: str | None = None,
+        finding_ref: str | None = None,
+    ) -> None:
         receipt = self.read_receipt(job_id)
         if receipt is None:
             raise IntegrityError("missing durable receipt")
@@ -341,6 +358,8 @@ class Store:
                     "request_ref": job["request_ref"],
                     "receipt_ref": ref,
                     "evaluation_ref": evaluation_ref,
+                    "critique_ref": critique_ref,
+                    "finding_ref": finding_ref,
                 },
             )
 

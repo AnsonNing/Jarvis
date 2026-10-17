@@ -19,6 +19,9 @@ jarvis = "jarvis.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+jarvis = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
@@ -39,5 +42,5 @@ check_untyped_defs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["pandas.*", "pyarrow.*"]
+module = ["pandas.*", "pyarrow.*", "lightgbm.*"]
 ignore_missing_imports = true

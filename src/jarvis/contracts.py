@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from jarvis.identity import digest
 
@@ -19,6 +19,13 @@ class Record(BaseModel):
         extra="forbid", frozen=True, allow_inf_nan=False, validate_default=True
     )
     schema_version: Literal[1] = 1
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def exact_version(cls, value: Any) -> int:
+        if type(value) is not int or value != 1:
+            raise ValueError("unsupported integer schema version")
+        return value
 
 
 class Budget(Record):
