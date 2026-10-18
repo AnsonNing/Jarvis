@@ -29,8 +29,10 @@ target trigger. Net PL uses quantity and multiplier, then subtracts both-side
 fees. It never clips or reuses saved outcome PL. Results are labelled SIMULATED:
 quotes do not prove execution, available depth or acknowledgements.
 
-The full quote path must cover fill through horizon plus latency within the
-declared maximum quote gap. Orphan/duplicate/unsorted ticks, ambiguous position
+The full quote path must cover fill through the first available quote at/after
+horizon plus latency within the declared maximum quote gap. This includes the
+last execution gap; an artificial horizon timestamp cannot hide a late quote.
+Orphan/duplicate/unsorted ticks, ambiguous position
 lineage, missing/sparse paths and unsupported fill semantics are rejected. Missing
 path coverage becomes a recorded REQUIRES_CAPABILITY result without a PL value.
 Jobs pin inputs/settings/runner identities, reserve cost before running, adopt a

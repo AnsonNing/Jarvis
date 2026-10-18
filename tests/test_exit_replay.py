@@ -92,6 +92,13 @@ def test_horizon_precedes_a_price_trigger_after_the_horizon():
     assert value["episodes"][0]["trigger_time_ms"] == 2500
 
 
+def test_first_quote_after_horizon_cannot_hide_an_unbounded_execution_gap():
+    data = request(prices=(100, 100, 100, 110))
+    quotes = (*data.quotes[:-1], data.quotes[-1].model_copy(update={"timestamp_ms": 100000}))
+    with pytest.raises(AdmissionError, match="too sparse"):
+        replay_quotes(data.model_copy(update={"quotes": quotes}), settings())
+
+
 @pytest.mark.parametrize("fault", ["sparse", "truncated", "duplicate", "orphan"])
 def test_missing_and_ambiguous_paths_are_denied(fault):
     data = request()
@@ -152,6 +159,7 @@ def test_unknown_started_exit_is_not_resubmitted(tmp_path):
     with pytest.raises(JarvisError, match="no automatic resubmission"):
         run_exit_job(store, jid)
     assert len(store.jobs(jid)) == 1
+    assert store.status(jid) == "NEEDS_RECONCILIATION"
 
 
 def test_missing_price_path_is_a_recorded_capability_outcome(tmp_path):

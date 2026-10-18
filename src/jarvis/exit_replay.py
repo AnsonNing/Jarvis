@@ -94,8 +94,11 @@ def replay_quotes(data: ExitReplayInput, settings: ExitSettings) -> dict[str, An
             raise AdmissionError(
                 "REQUIRES_CAPABILITY: quote path must cover fill through horizon plus latency"
             )
-        relevant = [q for q in quotes if position.fill_time_ms <= q.timestamp_ms <= end]
-        check_times = [position.fill_time_ms, *[q.timestamp_ms for q in relevant], end]
+        # Include the first usable quote at/after the end. An artificial endpoint
+        # would hide an arbitrarily long gap before actual horizon execution.
+        coverage_end = next(t for t in times if t >= end)
+        relevant = [q for q in quotes if position.fill_time_ms <= q.timestamp_ms <= coverage_end]
+        check_times = [position.fill_time_ms, *[q.timestamp_ms for q in relevant]]
         if any(
             b - a > settings.max_quote_gap_ms
             for a, b in zip(check_times, check_times[1:], strict=False)
@@ -213,6 +216,7 @@ def run_exit_job(store: Store, campaign: str, *, fault: str | None = None) -> st
         receipt = store.read_receipt(job["id"])
         if receipt is None:
             if job["status"] != "QUEUED":
+                store.set_status(campaign, "NEEDS_RECONCILIATION")
                 raise JarvisError("unknown exit replay job; no automatic resubmission")
             store.start_job(job["id"])
             if fault == "after_start":

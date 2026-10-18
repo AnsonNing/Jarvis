@@ -137,7 +137,7 @@ their historical costs with zero new LLM/tool calls. Alternative policies cannot
 claim an unrecorded parameter design just because its tool ID matches.
 
 Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
-and [release acceptance](docs/implementation/RELEASE-0.3.md). The documents below
+and [release acceptance](docs/implementation/RELEASE-0.4.md). The documents below
 remain the broader P0–P5 design, not a claim that every planned capability exists.
 
 ## Run the complete synthetic Dream-RSI loop
