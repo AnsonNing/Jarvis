@@ -23,7 +23,7 @@ from jarvis.hermes_policy import (
 )
 from jarvis.identity import digest
 from jarvis.iris import IrisTransport, LocalIrisTransport
-from jarvis.iris_contracts import Family, IrisQueueSpec
+from jarvis.iris_contracts import Family, IrisExperiment, IrisQueueSpec
 from jarvis.providers import CodexProvider, ResearchProvider
 from jarvis.research_queue import IrisResearchQueue, queue_tasks
 from jarvis.research_roles import RoleCaller, strict_schema, verify_roles
@@ -646,9 +646,10 @@ def verify_hermes_dream(store: Store, study: str) -> dict[str, Any]:
                 ):
                     raise IntegrityError("prospective arm controls changed")
                 rows = queue_tasks(store, qid)
-                if [store.artifacts.get(t["experiment_ref"]) for t in rows] != [
-                    t.model_dump(mode="json") for t in plan.trials
-                ]:
+                if [
+                    IrisExperiment.model_validate(store.artifacts.get(t["experiment_ref"]))
+                    for t in rows
+                ] != list(plan.trials):
                     raise IntegrityError("prospective experiment catalog changed")
                 queue_events = store.events(qid)
                 sealed = [e for e in queue_events if e["event_type"] == "HERMES_WORLD_SEALED"]

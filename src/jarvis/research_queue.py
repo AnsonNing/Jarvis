@@ -11,7 +11,8 @@ from jarvis.campaign import code_provenance, source_identity
 from jarvis.contracts import AdmissionError, Cost, IntegrityError, JarvisError
 from jarvis.identity import digest, file_digest
 from jarvis.iris import IrisTransport, LocalIrisTransport, render_candidate, verify_environment
-from jarvis.iris_contracts import IrisAuthorization, IrisExperiment, IrisQueueSpec
+from jarvis.iris_contracts import IrisAuthorization, IrisEnvironment, IrisExperiment, IrisQueueSpec
+from jarvis.iris_preflight import preflight, verify_preflight
 from jarvis.iris_quota import IrisQuotaSnapshot, candidate_key, operating_ledger
 from jarvis.storage import Store
 
@@ -62,7 +63,10 @@ def queue_authorization(store: Store, queue_id: str) -> IrisAuthorization | None
             raise IntegrityError("conflicting local submission grants")
         return recorded[0]
     for prior in spec.prior_queues:
-        if store.manifest(prior)["spec"]["environment"] == spec.environment.model_dump(mode="json"):
+        if (
+            IrisEnvironment.model_validate(store.manifest(prior)["spec"]["environment"])
+            == spec.environment
+        ):
             value = queue_authorization(store, prior)
             if value:
                 recorded.append(value)
@@ -168,8 +172,11 @@ class IrisResearchQueue:
                     "identical candidate/period already attempted in standing research"
                 )
             for prior in spec.prior_queues:
-                if self.store.manifest(prior)["spec"]["environment"] != spec.environment.model_dump(
-                    mode="json"
+                if (
+                    IrisEnvironment.model_validate(
+                        self.store.manifest(prior)["spec"]["environment"]
+                    )
+                    != spec.environment
                 ):
                     continue
                 for known in queue_tasks(self.store, prior):
@@ -187,6 +194,7 @@ class IrisResearchQueue:
             if not rows and experiment.family != "baseline":
                 raise AdmissionError("first queued task must reproduce the baseline")
             cpp_ref = self.store.artifacts.put({"cpp": text})
+            preflight_ref = preflight(self.store, queue_id, spec.environment, cpp_ref)
             task_id = "trial-" + digest({"world": digest(spec), "candidate": cpp_ref})[7:31]
             self.store.append(
                 queue_id,
@@ -196,7 +204,8 @@ class IrisResearchQueue:
                     "experiment_ref": self.store.artifacts.put(experiment),
                     "cpp_ref": cpp_ref,
                     "evidence_snapshot": sorted(allowed),
-                    "preflight": "typed numeric/boolean changes inside declared regions only",
+                    "preflight": "typed scalars/closed rules inside declared regions only",
+                    "preflight_ref": preflight_ref,
                 },
             )
             return task_id
@@ -517,7 +526,7 @@ class IrisResearchQueue:
             if prior_queue not in spec.prior_queues:
                 raise AdmissionError("baseline source is not an admitted prior queue")
             previous = self.store.manifest(prior_queue)["spec"]["environment"]
-            if previous != spec.environment.model_dump(mode="json"):
+            if IrisEnvironment.model_validate(previous) != spec.environment:
                 raise IntegrityError(
                     "baseline reuse requires identical source, period and controls"
                 )
@@ -696,6 +705,7 @@ def verify_queue(store: Store, queue_id: str) -> dict[str, Any]:
     for event in events:
         p = event["payload"]
         if event["event_type"] == "RESEARCH_ENQUEUED":
+            verify_preflight(store, queue_id, event)
             experiment = IrisExperiment.model_validate(store.artifacts.get(p["experiment_ref"]))
             store.artifacts.get(p["cpp_ref"])
             if not set(p["evidence_snapshot"]) <= visible or not set(
@@ -752,8 +762,8 @@ def verify_queue(store: Store, queue_id: str) -> dict[str, Any]:
                     sources = [
                         t
                         for q in spec.prior_queues
-                        if store.manifest(q)["spec"]["environment"]
-                        == spec.environment.model_dump(mode="json")
+                        if IrisEnvironment.model_validate(store.manifest(q)["spec"]["environment"])
+                        == spec.environment
                         for t in queue_tasks(store, q)[:1]
                         if t.get("result_ref") == request["imported_from"]
                         and t["status"] == "SUCCEEDED"

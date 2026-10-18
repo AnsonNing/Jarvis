@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-18. Release: 0.6.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, a private Iris research queue and standing-authorized continuous research are available.
+Date: 2026-10-18. Release: 0.7.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, standing-authorized continuous Iris research and closed strategy-design interventions are available.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -20,9 +20,10 @@ Date: 2026-10-18. Release: 0.6.0. Synthetic Dream-RSI, Hermes baseline admission
 | P6 Iris research adapter/queue | VERIFIED_WITH_LIMITATIONS | Explicit accepted-package gate, region-only constants, read-only baseline reuse, durable request IDs, uncertainty stop, shared finite grants and offline receipt audit; inert private-API subprocess contract tests pass |
 | P6 direction program / Hermes Dream | VERIFIED_WITH_LIMITATIONS | Concurrent next-epoch direction role, immutable catalogs, causal prior evidence, exact replay, development finalist, one-shot heldout, fresh arms and measured canary rollback pass artificial acceptance; real policy promotion remains gated |
 | P7 continuous Iris research | VERIFIED_WITH_LIMITATIONS | Rolling bounded programs under standing owner authorization, shared conservative quota, cross-program candidate deduplication, rejection feedback, original-server-time acknowledgement reads and one persistent admission watcher; thirteen artificial executions span five programs, with zero remote submissions |
+| P8 strategy-design rules | VERIFIED_WITH_LIMITATIONS | Typed all/any entry/cancel predicates, session clocks, quantity and position limits; owner-pinned source bindings and compile receipts; five compiled artificial executions across two adaptive epochs preserve positive/negative findings; quiescent predecessor handoff retains histories and shared quota |
 
-Validation: **150 tests passed in 65.48s**, Ruff lint/format passed for 70 Python files,
-mypy passed for 52 source modules, schema export, task CLI and complete local
+Validation: **164 tests passed in 81.59s**, Ruff lint/format passed for 76 Python
+files and mypy passed for 56 source modules. Schema export, task CLI and complete local
 synthetic/Hermes workflows. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.
@@ -45,3 +46,10 @@ experiment-count limit while preserving finite program budgets. It continues L1
 strategy research; it does not automatically activate a new L3 policy. Research
 policy promotion still requires distinct histories and independent heldout/fresh
 tasks. L2 capability learning and arbitrary new strategy source remain incomplete.
+
+[Strategy-design research](P8-strategy-design.md) adds bounded rules and private
+source compilation. It preserves active older runtimes in their original checkout;
+a new watcher can take over only after their lease is released and receipts are
+settled. Real model acceptance remains mandatory. Compile success is engineering
+evidence, with no financial improvement, complete execution fidelity or live
+capacity verdict.

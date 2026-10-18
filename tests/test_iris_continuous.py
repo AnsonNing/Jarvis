@@ -264,7 +264,7 @@ def test_model_watcher_admits_then_resumes_completed_work_without_external_calls
     store, engine, unused, backend, provider = create_study(tmp_path / "store", iris_environment)
     spec = IrisContinuousSpec.model_validate(store.manifest(unused)["spec"])
     monkeypatch.setattr("jarvis.iris_watch.model_status", lambda _: {"status": "READY"})
-    monkeypatch.setattr("jarvis.iris_watch.prepare_continuous", lambda *_: spec)
+    monkeypatch.setattr("jarvis.iris_watch.prepare_continuous", lambda *_, **__: spec)
     monkeypatch.setattr("jarvis.iris_watch.time.sleep", lambda _: None)
     args = (store, tmp_path, tmp_path / "python", spec.owner_instruction, tmp_path / "state.json")
     state = watch_research(*args, engine=engine, max_steps=150)

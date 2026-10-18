@@ -12,6 +12,7 @@ from jarvis.hermes_policy import seal_world, verify_world
 from jarvis.identity import digest
 from jarvis.iris import IrisTransport, LocalIrisTransport, setting_capabilities
 from jarvis.iris_contracts import IrisExperiment, IrisQueueSpec
+from jarvis.iris_design import design_capabilities
 from jarvis.providers import CodexProvider, ResearchProvider
 from jarvis.research_queue import IrisResearchQueue, queue_tasks, verify_queue, visible_results
 from jarvis.research_roles import DirectionBatch, RoleCaller, strict_schema, verify_roles
@@ -50,8 +51,10 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
         },
         "scope": spec.queue.environment.period.exposure,
         "side": spec.queue.environment.side,
-        "available_settings": [b.setting for b in spec.queue.environment.bindings],
+        "available_settings": [b.setting for b in spec.queue.environment.bindings]
+        + [b["setting"] for b in design_capabilities(spec.queue.environment)],
         "setting_contracts": setting_capabilities(spec.queue.environment),
+        "rule_contracts": design_capabilities(spec.queue.environment),
         "existing_settings": [
             store.artifacts.get(t["experiment_ref"])["settings"]
             for q in links
@@ -330,7 +333,7 @@ def verify_program(store: Store, program: str) -> dict[str, Any]:
     verify_roles(store, program)
     events = store.events(program)
     links: list[str] = []
-    completed_refs: dict[str, str] = {}
+    completed_refs: dict[str, DirectionBatch] = {}
     for event in events:
         p = event["payload"]
         if event["event_type"] == "RESEARCH_QUEUE_ATTACHED":
@@ -383,11 +386,13 @@ def verify_program(store: Store, program: str) -> dict[str, Any]:
             # Preserve that original receipt, compare batch identity through the
             # same declared model used when admitting the proposal.
             if p.get("error") is None:
-                completed_refs[p["receipt_ref"]] = digest(
-                    DirectionBatch.model_validate(store.artifacts.get(p["answer_ref"]))
+                completed_refs[p["receipt_ref"]] = DirectionBatch.model_validate(
+                    store.artifacts.get(p["answer_ref"])
                 )
         if event["event_type"] in {"DIRECTION_BATCH_PREPARED", "DIRECTION_BATCH_ADMITTED"}:
-            if completed_refs.get(p["receipt_ref"]) != p["batch_ref"]:
+            if completed_refs.get(p["receipt_ref"]) != DirectionBatch.model_validate(
+                store.artifacts.get(p["batch_ref"])
+            ):
                 raise IntegrityError("direction batch lacks its observed role receipt")
             batch = DirectionBatch.model_validate(store.artifacts.get(p["batch_ref"]))
             if batch.context_id != p["context_id"] or any(

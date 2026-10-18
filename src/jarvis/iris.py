@@ -10,6 +10,36 @@ from typing import Any, Protocol
 from jarvis.contracts import AdmissionError, IntegrityError
 from jarvis.identity import digest, file_digest
 from jarvis.iris_contracts import IrisBinding, IrisEnvironment, IrisSettings
+from jarvis.iris_design import read_profile, render_rules
+
+
+def clock_to_ms(value: int) -> int:
+    hours, minutes, seconds, millis = (
+        value // 10000000,
+        value // 100000 % 100,
+        value // 1000 % 100,
+        value % 1000,
+    )
+    if hours > 23 or minutes > 59 or seconds > 59:
+        raise AdmissionError("invalid source HHMMSSmmm clock")
+    return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
+
+
+def ms_to_clock(value: int) -> int:
+    return (
+        value // 3600000 * 10000000
+        + value // 60000 % 60 * 100000
+        + value // 1000 % 60 * 1000
+        + value % 1000
+    )
+
+
+def scalar_pattern(binding: IrisBinding) -> str:
+    symbol = re.escape(binding.symbol)
+    if binding.syntax == "macro_bool":
+        return rf"(#define\s+{symbol}\s+\()\s*(true|false)\s*(\))"
+    kind = "uint32_t" if binding.syntax == "clock" else binding.syntax
+    return rf"(\bconstexpr\s+{kind}\s+{symbol}\s*=\s*)([-+0-9.eE']+)(\s*;)"
 
 
 def split_regions(text: str) -> list[tuple[bool, str]]:
@@ -45,14 +75,14 @@ def render_candidate(env: IrisEnvironment, settings: IrisSettings) -> str:
     original = path.read_text()
     parts = split_regions(original)
     for name, value in settings.changes().items():
+        if name in {"entry_rule", "cancel_rule"}:
+            continue
+        if type(value) not in {int, float, bool}:
+            raise AdmissionError("scalar setting requires a number or boolean")
         binding = next((b for b in env.bindings if b.setting == name), None)
         if binding is None:
             raise AdmissionError("REQUIRES_CAPABILITY: unbound Iris setting " + name)
-        symbol = re.escape(binding.symbol)
-        if binding.syntax == "macro_bool":
-            pattern = rf"(#define\s+{symbol}\s+\()\s*(true|false)\s*(\))"
-        else:
-            pattern = rf"(\bconstexpr\s+{binding.syntax}\s+{symbol}\s*=\s*)([-+0-9.eE]+)(\s*;)"
+        pattern = scalar_pattern(binding)
         count = 0
         edited = []
         current_region = None
@@ -66,7 +96,7 @@ def render_candidate(env: IrisEnvironment, settings: IrisSettings) -> str:
             def replace(
                 match: re.Match[str],
                 binding: IrisBinding | None = binding,
-                value: float | int | bool = value,
+                value: object = value,
             ) -> str:
                 nonlocal count
                 assert binding is not None
@@ -76,20 +106,23 @@ def render_candidate(env: IrisEnvironment, settings: IrisSettings) -> str:
                         raise AdmissionError("boolean binding requires a boolean")
                     encoded = str(value).lower()
                 else:
-                    if type(value) is bool:
+                    if type(value) not in {int, float} or not isinstance(value, (int, float)):
                         raise AdmissionError("numeric binding does not accept bool")
                     number = float(value) * binding.scale
                     if binding.mode == "delta":
-                        number += float(match[2])
+                        number += float(match[2].replace("'", ""))
                     if (binding.minimum is not None and number < binding.minimum) or (
                         binding.maximum is not None and number > binding.maximum
                     ):
                         raise AdmissionError("setting violates declared source units/bounds")
                     if binding.syntax == "int" and not number.is_integer():
                         raise AdmissionError("integer binding requires an integer")
-                    encoded = (
-                        str(int(number)) if binding.syntax == "int" else format(number, ".17g")
-                    )
+                    if binding.syntax == "clock":
+                        encoded = str(ms_to_clock(int(number)))
+                    else:
+                        encoded = (
+                            str(int(number)) if binding.syntax == "int" else format(number, ".17g")
+                        )
                 return match[1] + encoded + match[3]
 
             edited.append(
@@ -103,7 +136,15 @@ def render_candidate(env: IrisEnvironment, settings: IrisSettings) -> str:
         if count != 1:
             raise AdmissionError("setting must match exactly one writable constant")
         parts = edited
-    result = "".join(line for _, line in parts)
+    result = render_rules(env, "".join(line for _, line in parts), settings)
+    if any(k in settings.changes() for k in ["session_start_ms", "session_end_ms", "flat_time_ms"]):
+        clocks = {c["setting"]: c["baseline_value"] for c in setting_capabilities(env, text=result)}
+        values = [clocks.get(k) for k in ["session_start_ms", "session_end_ms", "flat_time_ms"]]
+        if any(v is None for v in values):
+            raise AdmissionError("session clock bindings are incomplete")
+        session_begin, session_end, flat = (float(v) for v in values if v is not None)
+        if not session_begin < session_end <= flat:
+            raise AdmissionError("session start < session end <= flat time must hold")
     if [line for writable, line in split_regions(original) if not writable] != [
         line for writable, line in split_regions(result) if not writable
     ]:
@@ -122,11 +163,12 @@ def verify_environment(env: IrisEnvironment) -> None:
     for name, expected_hash in expected.items():
         if file_digest(Path(name)) != expected_hash:
             raise IntegrityError("Iris protected input changed")
+    read_profile(env)
 
 
-def setting_capabilities(env: IrisEnvironment) -> list[dict[str, Any]]:
+def setting_capabilities(env: IrisEnvironment, *, text: str | None = None) -> list[dict[str, Any]]:
     """Only allowlisted constants and units are visible to the direction role."""
-    text = Path(env.template).read_text()
+    text = text if text is not None else Path(env.template).read_text()
     if file_digest(Path(env.template)) != env.template_sha256:
         raise IntegrityError("setting source changed")
     output = []
@@ -140,11 +182,12 @@ def setting_capabilities(env: IrisEnvironment) -> list[dict[str, Any]]:
             )
             value: Any = matches[0] == "true" if len(matches) == 1 else None
         else:
-            matches = re.findall(
-                rf"\bconstexpr\s+{binding.syntax}\s+{re.escape(binding.symbol)}\s*=\s*([-+0-9.eE]+)\s*;",
-                region,
+            matches = list(re.finditer(scalar_pattern(binding), region))
+            value = (
+                float(matches[0][2].replace("'", "")) / binding.scale if len(matches) == 1 else None
             )
-            value = float(matches[0]) / binding.scale if len(matches) == 1 else None
+            if binding.syntax == "clock" and value is not None:
+                value = clock_to_ms(int(value))
         output.append(
             {
                 "setting": binding.setting,
@@ -153,6 +196,7 @@ def setting_capabilities(env: IrisEnvironment) -> list[dict[str, Any]]:
                 "source_minimum": binding.minimum,
                 "source_maximum": binding.maximum,
                 "source_units_per_setting_unit": binding.scale,
+                "units": "ms_since_midnight" if binding.syntax == "clock" else binding.units,
             }
         )
     return output

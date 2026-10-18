@@ -496,8 +496,10 @@ def continuous_report(store: Store, owner: str) -> dict[str, Any]:
     }
 
 
-def prepare_continuous(upstream: Path, python: Path, owner_instruction: str) -> IrisContinuousSpec:
-    from jarvis.iris_admission import prepare_baseline, prepare_environment
+def prepare_continuous(
+    upstream: Path, python: Path, owner_instruction: str, *, design_root: Path | None = None
+) -> IrisContinuousSpec:
+    from jarvis.iris_admission import attach_design, prepare_baseline, prepare_environment
 
     tracks = []
     sides: tuple[Literal["long", "short"], ...] = ("long", "short")
@@ -505,10 +507,13 @@ def prepare_continuous(upstream: Path, python: Path, owner_instruction: str) -> 
     for side in sides:
         queues = []
         for window in windows:
+            environment = prepare_environment(upstream, side, "08", python, window=window)
+            if design_root:
+                environment = attach_design(environment, design_root / (side + ".json"))
             queues.append(
                 IrisQueueSpec(
                     goal="最大化 entry-only PL，完整記錄風險、機制、反證、負面結果與改善",
-                    environment=prepare_environment(upstream, side, "08", python, window=window),
+                    environment=environment,
                     baseline=prepare_baseline(upstream, side, "08", window=window),
                 )
             )
@@ -523,5 +528,6 @@ def prepare_continuous(upstream: Path, python: Path, owner_instruction: str) -> 
             "以停利、停損、模型/heuristic 砍單、入場 cutoff 與時間設定擴展研究；每次只提出一個可反駁實驗，必要時才做明確聯合對照。",
             "主目標 entry-only PL，保留回撤、最差日、集中度與全部負面結果；不要把風險藏入評分或把曝光月份稱為獨立驗證。",
             "先驗證兩日接入，再根據完整月 baseline 與先前結果逐輪改善；明確分析設定的機制，缺能力或無可執行的新假設時停止並記錄。",
+            "若已宣告策略設計能力，可探索砍單/額外入場 all/any 條件、交易時段與掛單/持倉限制。只用當時可得信號，不改模型輸入或期限處理。",
         ),
     )

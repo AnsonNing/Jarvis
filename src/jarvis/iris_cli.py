@@ -18,6 +18,7 @@ def add_commands(commands: Any) -> None:
     continuous.add_argument("--python", type=Path, required=True)
     continuous.add_argument("--owner-instruction", required=True)
     continuous.add_argument("--output", type=Path, required=True)
+    continuous.add_argument("--design-root", type=Path)
     iris.add_parser("continuous-start").add_argument("spec", type=Path)
     for operation in ["continuous-advance", "continuous-report", "continuous-quota"]:
         iris.add_parser(operation).add_argument("study_id")
@@ -34,6 +35,8 @@ def add_commands(commands: Any) -> None:
     watcher.add_argument("--wall-seconds", type=int, default=7200)
     watcher.add_argument("--poll-seconds", type=int, default=45)
     watcher.add_argument("--max-steps", type=int, default=2000)
+    watcher.add_argument("--design-root", type=Path)
+    watcher.add_argument("--predecessor-state", type=Path)
     iris.add_parser("model-status").add_argument("--upstream", type=Path, required=True)
     prepare = iris.add_parser("prepare")
     prepare.add_argument("--upstream", type=Path, required=True)
@@ -58,6 +61,9 @@ def add_commands(commands: Any) -> None:
     fixture = research.add_parser("fixture")
     fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
     fixture.add_argument("--executable", default="codex")
+    design_fixture = research.add_parser("design-fixture")
+    design_fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
+    design_fixture.add_argument("--executable", default="codex")
     research.add_parser("start").add_argument("spec", type=Path)
     prepare = research.add_parser("prepare")
     prepare.add_argument("--environment", type=Path, required=True)
@@ -89,6 +95,10 @@ def read(path: Path) -> Any:
 
 
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "research" and args.operation == "design-fixture":
+        from jarvis.iris_design_fixture import run_design_fixture
+
+        return run_design_fixture(store, agent=args.agent, executable=args.executable)
     if args.command in {"research", "hermes-dream"} and args.operation == "fixture":
         from jarvis.research_fixture import run_fixture
 
@@ -120,12 +130,14 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
                     wall_seconds=args.wall_seconds,
                     poll_seconds=args.poll_seconds,
                     max_steps=args.max_steps,
+                    design_root=args.design_root,
+                    predecessor_state=args.predecessor_state,
                 )
             if args.operation == "continuous-prepare":
                 if args.output.exists():
                     raise JarvisError("choose a new private continuous study specification")
                 continuous_spec = prepare_continuous(
-                    args.upstream, args.python, args.owner_instruction
+                    args.upstream, args.python, args.owner_instruction, design_root=args.design_root
                 )
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_bytes(canonical(continuous_spec) + b"\n")

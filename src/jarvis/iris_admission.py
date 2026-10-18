@@ -14,6 +14,35 @@ from jarvis.iris_contracts import (
     IrisPeriod,
     IrisSettings,
 )
+from jarvis.iris_design import IrisDesignProfile, design_capabilities
+
+
+def attach_design(env: IrisEnvironment, profile_path: Path) -> IrisEnvironment:
+    """Owner-prepared integration; no agent-generated source or feature mapping."""
+    profile_path = profile_path.resolve()
+    profile = IrisDesignProfile.model_validate_json(profile_path.read_bytes())
+    pinned = {**env.accepted_inputs, str(profile_path): file_digest(profile_path)}
+    for name in [profile.build.compiler, *profile.build.chunks]:
+        if Path(name).is_absolute():
+            pinned[name] = file_digest(Path(name))
+    value = IrisEnvironment.model_validate(
+        {
+            **env.model_dump(mode="json"),
+            "bindings": [
+                b.model_dump(mode="json") for b in (*env.bindings, *profile.scalar_bindings)
+            ],
+            "design_profile": str(profile_path),
+            "accepted_inputs": pinned,
+        }
+    )
+    verify_environment(value)
+    # Validate scalar source matching, declared units and rule profile before use.
+    from jarvis.iris import setting_capabilities
+
+    if any(b["baseline_value"] is None for b in setting_capabilities(value)):
+        raise AdmissionError("design scalar binding has no unique source constant")
+    design_capabilities(value)
+    return value
 
 
 def model_status(folder: Path) -> dict[str, Any]:

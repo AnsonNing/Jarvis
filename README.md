@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.6 adds continuous, quota-aware research on top of the private Iris adapter, durable research queue, concurrent direction planning and Hermes Dream-RSI. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.7 adds closed strategy-design rules, trading schedules and position/quantity settings to continuous, quota-aware Iris research. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -28,6 +28,16 @@ short programs automatically continue using recorded results and a shared quota
 ledger, with no fixed eight-run lifetime cap. `iris continuous-watch` waits for
 full model acceptance and persists the study before any new dispatch. Missing or
 stale quota evidence, unknown operations and recorded research stops are retained.
+
+[Strategy-design research](docs/implementation/P8-strategy-design.md) supports
+owner-bound entry/cancellation conditions, session clocks and position limits.
+Agents propose a closed rule DSL; trusted private profiles render and compile it.
+An isolated successor watcher preserves an active earlier runtime and waits for
+known, settled work before taking over. Start with the compiled artificial fixture:
+
+```sh
+jarvis --store .jarvis/design-fixture research design-fixture
+```
 
 ## Run locally
 
@@ -160,7 +170,7 @@ their historical costs with zero new LLM/tool calls. Alternative policies cannot
 claim an unrecorded parameter design just because its tool ID matches.
 
 Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
-and [release acceptance](docs/implementation/RELEASE-0.6.md). The documents below
+and [release acceptance](docs/implementation/RELEASE-0.7.md). The documents below
 remain the broader P0–P5 design, not a claim that every planned capability exists.
 
 ## Run the complete synthetic Dream-RSI loop

@@ -1,0 +1,1 @@
+{"additionalProperties":false,"properties":{"chunks":{"items":{"type":"string"},"maxItems":20,"minItems":1,"title":"Chunks","type":"array"},"compiler":{"title":"Compiler","type":"string"},"schema_version":{"const":1,"default":1,"title":"Schema Version","type":"integer"}},"required":["compiler","chunks"],"title":"IrisBuildProfile","type":"object"}

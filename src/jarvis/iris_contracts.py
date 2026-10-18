@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from jarvis.contracts import Budget, Record
+from jarvis.iris_design import IrisBinding as IrisBinding
+from jarvis.iris_design import IrisRule
 
 Family = Literal["entry", "cancel", "timing", "heuristic", "exit", "joint", "baseline"]
 
@@ -20,20 +22,17 @@ class IrisSettings(Record):
     sampling_ms: Annotated[int, Field(ge=10, le=5000, strict=True)] | None = None
     bypass_heuristic_cancel: bool | None = None
     bypass_cancel_model: bool | None = None
+    entry_rule: IrisRule | None = None
+    cancel_rule: IrisRule | None = None
+    session_start_ms: Annotated[int, Field(ge=0, le=86399999, strict=True)] | None = None
+    session_end_ms: Annotated[int, Field(ge=0, le=86399999, strict=True)] | None = None
+    flat_time_ms: Annotated[int, Field(ge=0, le=86399999, strict=True)] | None = None
+    hang_volume_ratio: Annotated[float, Field(gt=0, le=1)] | None = None
+    max_pending_notional: Annotated[float, Field(gt=0, le=100000000)] | None = None
+    max_position_notional: Annotated[float, Field(gt=0, le=100000000)] | None = None
 
-    def changes(self) -> dict[str, float | int | bool]:
+    def changes(self) -> dict[str, object]:
         return self.model_dump(exclude={"schema_version"}, exclude_none=True)
-
-
-class IrisBinding(Record):
-    setting: str = Field(pattern=r"^[a-z_]+$")
-    symbol: str = Field(pattern=r"^[A-Za-z_][A-Za-z_0-9]*$")
-    region: str = Field(pattern=r"^[A-Za-z0-9_]+$")
-    syntax: Literal["double", "int", "macro_bool"]
-    scale: Annotated[float, Field(gt=0)] = 1
-    mode: Literal["absolute", "delta"] = "absolute"
-    minimum: float | None = None
-    maximum: float | None = None
 
 
 class IrisPeriod(Record):
@@ -68,7 +67,8 @@ class IrisEnvironment(Record):
     agent_script_sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     model_lineage: str = Field(min_length=1)
     accepted_inputs: dict[str, str] = Field(min_length=1)
-    bindings: tuple[IrisBinding, ...] = Field(min_length=1, max_length=8)
+    bindings: tuple[IrisBinding, ...] = Field(min_length=1, max_length=20)
+    design_profile: str | None = None
     period: IrisPeriod
     side: Literal["long", "short", "both"]
     origin: Literal["owner_provided"] = "owner_provided"
@@ -120,9 +120,15 @@ class IrisExperiment(Record):
         if n > 3 or (self.family != "joint" and n > 1):
             raise ValueError("single-factor or explicitly joint experiment required")
         families = {
-            "entry": {"trading_cutoff_delta"},
-            "cancel": {"cancel_risk_delta", "bypass_cancel_model"},
-            "timing": {"sampling_ms"},
+            "entry": {
+                "trading_cutoff_delta",
+                "entry_rule",
+                "hang_volume_ratio",
+                "max_pending_notional",
+                "max_position_notional",
+            },
+            "cancel": {"cancel_risk_delta", "bypass_cancel_model", "cancel_rule"},
+            "timing": {"sampling_ms", "session_start_ms", "session_end_ms", "flat_time_ms"},
             "heuristic": {"heuristic_cancel_bps", "bypass_heuristic_cancel"},
             "exit": {"take_profit_bps", "stop_loss_bps"},
             "baseline": set(),
