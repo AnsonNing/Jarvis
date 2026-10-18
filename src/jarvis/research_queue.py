@@ -12,6 +12,7 @@ from jarvis.contracts import AdmissionError, Cost, IntegrityError, JarvisError
 from jarvis.identity import digest, file_digest
 from jarvis.iris import IrisTransport, LocalIrisTransport, render_candidate, verify_environment
 from jarvis.iris_contracts import IrisAuthorization, IrisExperiment, IrisQueueSpec
+from jarvis.iris_quota import IrisQuotaSnapshot, candidate_key, operating_ledger
 from jarvis.storage import Store
 
 TERMINAL = {"SUCCEEDED", "FAILED", "REJECTED", "INVALID_RESULT"}
@@ -56,6 +57,10 @@ def queue_authorization(store: Store, queue_id: str) -> IrisAuthorization | None
     ]
     if spec.authorization:
         recorded.append(spec.authorization)
+    if recorded:
+        if len({digest(a) for a in recorded}) > 1:
+            raise IntegrityError("conflicting local submission grants")
+        return recorded[0]
     for prior in spec.prior_queues:
         if store.manifest(prior)["spec"]["environment"] == spec.environment.model_dump(mode="json"):
             value = queue_authorization(store, prior)
@@ -114,9 +119,10 @@ class IrisResearchQueue:
                 if existing == authorization:
                     return
                 raise AdmissionError("submission grant is immutable once recorded")
-            if authorization.environment_id != digest(
-                spec.environment
-            ) or authorization.expires_at <= datetime.now(UTC):
+            if authorization.environment_id != digest(spec.environment) or (
+                authorization.expires_at is not None
+                and authorization.expires_at <= datetime.now(UTC)
+            ):
                 raise AdmissionError(
                     "submission grant is expired or belongs to another environment"
                 )
@@ -149,6 +155,18 @@ class IrisResearchQueue:
                 raise AdmissionError("future or incompatible research evidence")
             text = render_candidate(spec.environment, experiment.settings)
             cpp_hash = digest({"cpp": text})
+            for row in rows:
+                if row["cpp_ref"] == cpp_hash:
+                    return str(row["task_id"])
+            ledger = operating_ledger(self.store, spec)
+            if (
+                experiment.family != "baseline"
+                and ledger
+                and ledger.attempted(candidate_key(spec, cpp_hash))
+            ):
+                raise AdmissionError(
+                    "identical candidate/period already attempted in standing research"
+                )
             for prior in spec.prior_queues:
                 if self.store.manifest(prior)["spec"]["environment"] != spec.environment.model_dump(
                     mode="json"
@@ -239,6 +257,9 @@ class IrisResearchQueue:
                         "request_id": row["request_id"],
                     }
                 seconds = time.monotonic() - started
+                ledger = operating_ledger(self.store, spec)
+                if ledger and result.get("quota_snapshot"):
+                    ledger.observe(IrisQuotaSnapshot.model_validate(result["quota_snapshot"]))
                 self.store.append(
                     queue_id,
                     "IRIS_COLLECTED",
@@ -314,7 +335,7 @@ class IrisResearchQueue:
             if (
                 auth is None
                 or auth.environment_id != digest(spec.environment)
-                or auth.expires_at <= datetime.now(UTC)
+                or (auth.expires_at is not None and auth.expires_at <= datetime.now(UTC))
             ):
                 return {
                     "status": "AWAITING_SUBMISSION_AUTHORIZATION",
@@ -355,6 +376,11 @@ class IrisResearchQueue:
                 "world_id": self.store.manifest(queue_id)["world_id"],
                 "authorization_ref": self.store.artifacts.put(auth),
             }
+            ledger = operating_ledger(self.store, spec)
+            if ledger:
+                retained_id = ledger.request_for_task(row["task_id"])
+                if retained_id:
+                    request["request_id"] = retained_id
             orphan = [
                 j
                 for j in self.store.jobs(queue_id)
@@ -366,6 +392,12 @@ class IrisResearchQueue:
                 jid = orphan[0]["id"]
                 request = self.store.artifacts.get(orphan[0]["request_ref"])
             else:
+                if ledger:
+                    quota = ledger.reserve(
+                        row["task_id"], request["request_id"], candidate_key(spec, row["cpp_ref"])
+                    )
+                    if quota["status"] != "RESERVED":
+                        return quota
                 # One finite authorization is shared across linked epoch queues.
                 grant = digest(auth)
                 with self.store.transaction() as conn:
@@ -578,6 +610,14 @@ class IrisResearchQueue:
 
     def _settle(self, queue_id: str, row: dict[str, Any], receipt: dict[str, Any]) -> None:
         result = self.store.artifacts.get(receipt["result_ref"])
+        spec = IrisQueueSpec.model_validate(self.store.manifest(queue_id)["spec"])
+        ledger = operating_ledger(self.store, spec)
+        if ledger and receipt.get("request_id"):
+            ledger.completed(
+                receipt["request_id"],
+                quota_refused=result.get("reason") == "quota_exhausted",
+                result_ref=receipt["result_ref"],
+            )
         self.store.finish_auxiliary_job(
             row["job_id"],
             "IRIS_RESULT_RECORDED",
@@ -634,7 +674,7 @@ def verify_queue(store: Store, queue_id: str) -> dict[str, Any]:
     """Offline journal/receipt audit; never opens upstream data or network."""
     manifest = store.manifest(queue_id)
     spec = IrisQueueSpec.model_validate(manifest["spec"])
-    if manifest["world_id"] != digest(spec):
+    if manifest["world_id"] != digest(manifest["spec"]):
         raise IntegrityError("queue world changed")
     jobs = {j["id"]: j for j in store.jobs(queue_id)}
     events = store.events(queue_id)
@@ -678,6 +718,20 @@ def verify_queue(store: Store, queue_id: str) -> dict[str, Any]:
                 or request.get("authorization_ref") != digest(queue_authorization(store, queue_id))
             ):
                 raise IntegrityError("external request lineage changed")
+            if spec.operating_owner:
+                witnesses = [
+                    e
+                    for e in store.events(spec.operating_owner)
+                    if e["event_type"] == "IRIS_QUOTA_RESERVED"
+                    and e["payload"]["request_id"] == p["request_id"]
+                    and e["payload"]["task_id"] == p["task_id"]
+                    and e["payload"]["candidate_key"] == candidate_key(spec, row["cpp_ref"])
+                ]
+                if (
+                    len(witnesses) != 1
+                    or witnesses[0]["recorded_at_utc"] > event["recorded_at_utc"]
+                ):
+                    raise IntegrityError("remote dispatch lacks prior shared quota reservation")
         if event["event_type"] == "IRIS_RESULT_RECORDED":
             job = jobs[p["job_id"]]
             receipt = store.artifacts.get(p["receipt_ref"])

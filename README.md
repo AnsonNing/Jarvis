@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.5 adds a private Iris adapter, a durable research queue, concurrent direction planning and Hermes Dream-RSI. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.6 adds continuous, quota-aware research on top of the private Iris adapter, durable research queue, concurrent direction planning and Hermes Dream-RSI. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -20,8 +20,14 @@ jarvis --store .jarvis/policy-llm-fixture hermes-dream fixture --agent codex
 
 Artificial outcomes always carry `SIMULATED_FIXTURE`. The deliberate shifted
 canary exercises rollback. A real Iris study needs a completed accepted model
-package and an explicit finite submission envelope. August/September results
+package and explicit owner authorization, with bounded programs and quota accounting. August/September results
 already seen during model development remain retrospective research data.
+
+Standing owner authorization can enable [continuous Iris research](docs/implementation/P7-continuous-iris-research.md):
+short programs automatically continue using recorded results and a shared quota
+ledger, with no fixed eight-run lifetime cap. `iris continuous-watch` waits for
+full model acceptance and persists the study before any new dispatch. Missing or
+stale quota evidence, unknown operations and recorded research stops are retained.
 
 ## Run locally
 
@@ -154,7 +160,7 @@ their historical costs with zero new LLM/tool calls. Alternative policies cannot
 claim an unrecorded parameter design just because its tool ID matches.
 
 Implementation status and verified limits: [PROGRESS](docs/implementation/PROGRESS.md)
-and [release acceptance](docs/implementation/RELEASE-0.4.md). The documents below
+and [release acceptance](docs/implementation/RELEASE-0.6.md). The documents below
 remain the broader P0–P5 design, not a claim that every planned capability exists.
 
 ## Run the complete synthetic Dream-RSI loop

@@ -92,12 +92,12 @@ class IrisAuthorization(Record):
     kind: Literal["IrisAuthorization"] = "IrisAuthorization"
     environment_id: str
     max_submissions: Annotated[int, Field(ge=1, le=32, strict=True)]
-    expires_at: datetime
+    expires_at: datetime | None
     owner_note: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def timezone(self) -> "IrisAuthorization":
-        if self.expires_at.tzinfo is None:
+        if self.expires_at is not None and self.expires_at.tzinfo is None:
             raise ValueError("authorization expiry needs a timezone")
         return self
 
@@ -161,7 +161,8 @@ class IrisQueueSpec(Record):
     )
     primary_metric: Literal["entry_only_pl"] = "entry_only_pl"
     risk_policy: Literal["record_all_no_hidden_penalty"] = "record_all_no_hidden_penalty"
-    prior_queues: tuple[str, ...] = Field(default=(), max_length=16)
+    prior_queues: tuple[str, ...] = Field(default=(), max_length=64)
+    operating_owner: str | None = None
 
 
 def read_environment(path: Path) -> IrisEnvironment:

@@ -13,6 +13,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,25 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
         return evaluate_result(evaluator, env, request, path, job, None)
     iris = load_module(root / "iris_agent.py", "iris_agent")
     cfg = iris.load_config()  # Never returned, logged or passed to the parent.
+    if operation == "quota":
+        known = set(request["known_request_ids"])
+        candidates = []
+        for page in range(1, 6):
+            listing = iris.api(
+                cfg["token"], "files.list", channel=cfg["channel"], count=200, page=page
+            )
+            for file in listing["files"]:
+                match = re.fullmatch(r"iris-([a-f0-9]{8})-queued\.txt", file.get("name", ""))
+                if match and match[1] in known:
+                    candidates.append((int(file["created"]), match[1], file))
+            if page >= int(listing.get("paging", {}).get("pages", 1)):
+                break
+        for created, known_id, file in sorted(candidates, key=lambda x: x[0], reverse=True)[:5]:
+            ack = iris.download(cfg, file)
+            snapshot = quota_snapshot(ack, created, known_id, env["branch"])
+            if snapshot:
+                return {"status": "QUOTA_OBSERVED", "snapshot": snapshot}
+        return {"status": "QUOTA_UNAVAILABLE"}
     if operation == "submit":
         candidate = Path(request["candidate_path"])
         if sha(candidate) != request["candidate_sha256"]:
@@ -98,10 +118,33 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
         return {"status": "SUBMITTED", "request_id": rid, "candidate_sha256": sha(candidate)}
     found = iris.answers(cfg, rid, None)
     queue_ack = iris.download(cfg, found[iris.QUEUED]) if iris.QUEUED in found else None
+    queued_meta = found.get(iris.QUEUED, {})
+    quota = quota_snapshot(
+        queue_ack,
+        queued_meta.get("created") if isinstance(queued_meta, dict) else None,
+        rid,
+        env["branch"],
+    )
     if iris.REJECTED in found:
-        return {"status": "REJECTED", "request_id": rid, "queue_ack": queue_ack}
+        reason = (
+            "quota_exhausted"
+            if re.search(r"quota|daily limit|額度", iris.download(cfg, found[iris.REJECTED]), re.I)
+            else "backend_rejected"
+        )
+        return {
+            "status": "REJECTED",
+            "request_id": rid,
+            "queue_ack": queue_ack,
+            "quota_snapshot": quota,
+            "reason": reason,
+        }
     if iris.DONE not in found or iris.JOB not in found:
-        return {"status": "PENDING", "request_id": rid, "queue_ack": queue_ack}
+        return {
+            "status": "PENDING",
+            "request_id": rid,
+            "queue_ack": queue_ack,
+            "quota_snapshot": quota,
+        }
     job = json.loads(iris.download(cfg, found[iris.JOB]))
     reply = iris.download(cfg, found[iris.DONE])
     if iris.exit_code(reply) != 0:
@@ -111,6 +154,7 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
             "job": job,
             "reason": "build or execution failure",
             "queue_ack": queue_ack,
+            "quota_snapshot": quota,
         }
     actual_period = "-".join(job.get("period", []))
     if (
@@ -138,7 +182,28 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
         return {"status": "PENDING", "request_id": rid}
     folder = iris.result_dir(cfg, rid, found, directory / "results")
     path = folder / Path(raw_names[0]).name
-    return evaluate_result(evaluator, env, request, path, job, queue_ack)
+    return {
+        **evaluate_result(evaluator, env, request, path, job, queue_ack),
+        "quota_snapshot": quota,
+    }
+
+
+def quota_snapshot(ack: Any, created: Any, request_id: str, branch: str) -> dict[str, Any] | None:
+    if not ack or not created or branch not in ack:
+        return None
+    match = re.search(r"today\s+(\d+)/(\d+)", ack)
+    if not match:
+        return None
+    return {
+        "schema_version": 1,
+        "kind": "IrisQuotaSnapshot",
+        "used": int(match[1]),
+        "limit": int(match[2]),
+        "ack_created_at": datetime.fromtimestamp(float(created), UTC).isoformat(),
+        "request_id": request_id,
+        "source": "IRIS_QUEUE_ACK",
+        "authoritative_current": False,
+    }
 
 
 def evaluate_result(

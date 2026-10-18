@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-18. Release: 0.5.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research and a private Iris research queue are available.
+Date: 2026-10-18. Release: 0.6.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, a private Iris research queue and standing-authorized continuous research are available.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -19,8 +19,10 @@ Date: 2026-10-18. Release: 0.5.0. Synthetic Dream-RSI, Hermes baseline admission
 | Domain settings design | VERIFIED_WITH_LIMITATIONS | Risk/age cancellation DSL, controlled joint comparisons and separate durable quote exit simulation; synthetic quote tests cover execution gaps/latency/fees. Real stop/target execution is NOT_RUN |
 | P6 Iris research adapter/queue | VERIFIED_WITH_LIMITATIONS | Explicit accepted-package gate, region-only constants, read-only baseline reuse, durable request IDs, uncertainty stop, shared finite grants and offline receipt audit; inert private-API subprocess contract tests pass |
 | P6 direction program / Hermes Dream | VERIFIED_WITH_LIMITATIONS | Concurrent next-epoch direction role, immutable catalogs, causal prior evidence, exact replay, development finalist, one-shot heldout, fresh arms and measured canary rollback pass artificial acceptance; real policy promotion remains gated |
+| P7 continuous Iris research | VERIFIED_WITH_LIMITATIONS | Rolling bounded programs under standing owner authorization, shared conservative quota, cross-program candidate deduplication, rejection feedback, original-server-time acknowledgement reads and one persistent admission watcher; thirteen artificial executions span five programs, with zero remote submissions |
 
-Validation: `pytest -q`, Ruff lint/format, mypy, task CLI and complete local
+Validation: **150 tests passed in 65.48s**, Ruff lint/format passed for 70 Python files,
+mypy passed for 52 source modules, schema export, task CLI and complete local
 synthetic/Hermes workflows. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.
@@ -37,3 +39,9 @@ The P6 implementation and operating boundaries are recorded in
 package is consumed read-only after its upstream workflow finishes; no incomplete
 or single-month substitute passes this gate. Development research can proceed
 after acceptance without claiming an independent real-policy verdict.
+
+[Continuous Iris research](P7-continuous-iris-research.md) removes a fixed lifetime
+experiment-count limit while preserving finite program budgets. It continues L1
+strategy research; it does not automatically activate a new L3 policy. Research
+policy promotion still requires distinct histories and independent heldout/fresh
+tasks. L2 capability learning and arbitrary new strategy source remain incomplete.

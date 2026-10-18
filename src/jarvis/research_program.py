@@ -57,6 +57,15 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
             for q in links
             for t in queue_tasks(store, q)
         ],
+        "admission_feedback": [
+            {
+                "batch_ref": e["payload"]["batch_ref"],
+                "rejected": e["payload"]["rejected"],
+                "capability_requests": e["payload"]["capability_requests"],
+            }
+            for e in store.events(program)
+            if e["event_type"] == "DIRECTION_BATCH_ADMITTED"
+        ],
         "visible_evidence_ids": [r["result_ref"] for r in results],
         "observations": [
             {
@@ -135,11 +144,16 @@ class ResearchProgram:
             try:
                 if proposal.origin != "agent_proposed" or proposal.family == "baseline":
                     raise AdmissionError("direction role must propose a new candidate")
-                accepted.append(
-                    self.queue.enqueue(
-                        qid, proposal, allowed_evidence=set(prepared["visible_refs"])
-                    )
+                task_id = self.queue.enqueue(
+                    qid, proposal, allowed_evidence=set(prepared["visible_refs"])
                 )
+                if task_id in accepted or task_id not in {
+                    t["task_id"] for t in queue_tasks(self.store, qid)
+                }:
+                    raise AdmissionError(
+                        "candidate duplicates an existing batch or prior comparison"
+                    )
+                accepted.append(task_id)
             except AdmissionError as exc:
                 rejected.append(
                     {"experiment": proposal.model_dump(mode="json"), "reason": str(exc)}
@@ -182,6 +196,18 @@ class ResearchProgram:
         if rows[0]["status"] == "QUEUED" and len(links) > 1:
             self.queue.adopt_baseline(qid, links[-2])
             rows = queue_tasks(self.store, qid)
+        elif rows[0]["status"] == "QUEUED":
+            for prior in reversed(spec.queue.prior_queues):
+                prior_spec = IrisQueueSpec.model_validate(self.store.manifest(prior)["spec"])
+                known = queue_tasks(self.store, prior)
+                if (
+                    prior_spec.environment == spec.queue.environment
+                    and known
+                    and known[0]["status"] == "SUCCEEDED"
+                ):
+                    self.queue.adopt_baseline(qid, prior)
+                    rows = queue_tasks(self.store, qid)
+                    break
         if rows[0]["status"] != "SUCCEEDED":
             return {"program_id": program, "queue_id": qid, **self.queue.tick(qid)}
         events = self.store.events(program)
@@ -205,7 +231,11 @@ class ResearchProgram:
             prepared is None
             and not stopped
             and len(batches) < spec.max_direction_batches
-            and (current is None or any(t["status"] == "SUCCEEDED" for t in rows[1:]))
+            and (
+                current is None
+                or not current["accepted"]
+                or any(t["status"] == "SUCCEEDED" for t in rows[1:])
+            )
         )
         if can_direct:
             context = direction_context(self.store, program, qid)
@@ -314,7 +344,10 @@ def verify_program(store: Store, program: str) -> dict[str, Any]:
                 if links
                 else spec.queue
             )
-            if store.manifest(qid)["spec"] != expected.model_dump(mode="json") or qid in links:
+            if (
+                IrisQueueSpec.model_validate(store.manifest(qid)["spec"]) != expected
+                or qid in links
+            ):
                 raise IntegrityError("program queue escaped its fixed controls")
             verify_queue(store, qid)
             links.append(qid)

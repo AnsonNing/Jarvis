@@ -13,6 +13,27 @@ from jarvis.storage import Store
 
 def add_commands(commands: Any) -> None:
     iris = commands.add_parser("iris").add_subparsers(dest="operation", required=True)
+    continuous = iris.add_parser("continuous-prepare")
+    continuous.add_argument("--upstream", type=Path, required=True)
+    continuous.add_argument("--python", type=Path, required=True)
+    continuous.add_argument("--owner-instruction", required=True)
+    continuous.add_argument("--output", type=Path, required=True)
+    iris.add_parser("continuous-start").add_argument("spec", type=Path)
+    for operation in ["continuous-advance", "continuous-report", "continuous-quota"]:
+        iris.add_parser(operation).add_argument("study_id")
+    continuous = iris.add_parser("continuous-run")
+    continuous.add_argument("study_id")
+    continuous.add_argument("--wall-seconds", type=int, default=1800)
+    continuous.add_argument("--poll-seconds", type=int, default=45)
+    continuous.add_argument("--max-steps", type=int, default=200)
+    watcher = iris.add_parser("continuous-watch")
+    watcher.add_argument("--upstream", type=Path, required=True)
+    watcher.add_argument("--python", type=Path, required=True)
+    watcher.add_argument("--owner-instruction", required=True)
+    watcher.add_argument("--state", type=Path, required=True)
+    watcher.add_argument("--wall-seconds", type=int, default=7200)
+    watcher.add_argument("--poll-seconds", type=int, default=45)
+    watcher.add_argument("--max-steps", type=int, default=2000)
     iris.add_parser("model-status").add_argument("--upstream", type=Path, required=True)
     prepare = iris.add_parser("prepare")
     prepare.add_argument("--upstream", type=Path, required=True)
@@ -78,6 +99,56 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             executable=args.executable,
         )
     if args.command == "iris":
+        if args.operation.startswith("continuous-"):
+            from jarvis.iris_continuous import (
+                IrisContinuousSpec,
+                IrisContinuousStudy,
+                continuous_report,
+                prepare_continuous,
+            )
+
+            continuous_engine = IrisContinuousStudy(store)
+            if args.operation == "continuous-watch":
+                from jarvis.iris_watch import watch_research
+
+                return watch_research(
+                    store,
+                    args.upstream,
+                    args.python,
+                    args.owner_instruction,
+                    args.state,
+                    wall_seconds=args.wall_seconds,
+                    poll_seconds=args.poll_seconds,
+                    max_steps=args.max_steps,
+                )
+            if args.operation == "continuous-prepare":
+                if args.output.exists():
+                    raise JarvisError("choose a new private continuous study specification")
+                continuous_spec = prepare_continuous(
+                    args.upstream, args.python, args.owner_instruction
+                )
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_bytes(canonical(continuous_spec) + b"\n")
+                return {"status": "PREPARED_NO_SUBMISSION", "spec": str(args.output)}
+            if args.operation == "continuous-start":
+                return {
+                    "study_id": continuous_engine.create(
+                        IrisContinuousSpec.model_validate(read(args.spec))
+                    ),
+                    "status": "READY",
+                }
+            if args.operation == "continuous-quota":
+                return continuous_engine.refresh_quota(args.study_id)
+            if args.operation == "continuous-advance":
+                return continuous_engine.advance(args.study_id)
+            if args.operation == "continuous-run":
+                return continuous_engine.run(
+                    args.study_id,
+                    wall_seconds=args.wall_seconds,
+                    poll_seconds=args.poll_seconds,
+                    max_steps=args.max_steps,
+                )
+            return continuous_report(store, args.study_id)
         from jarvis.iris_admission import model_status, prepare_baseline, prepare_environment
         from jarvis.iris_contracts import IrisAuthorization, IrisExperiment, IrisQueueSpec
         from jarvis.research_queue import IrisResearchQueue, queue_tasks, verify_queue

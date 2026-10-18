@@ -163,6 +163,7 @@ class IrisTransport(Protocol):
     def submit(self, request: dict[str, Any], directory: Path) -> dict[str, Any]: ...
     def collect(self, request: dict[str, Any], directory: Path) -> dict[str, Any]: ...
     def import_baseline(self, request: dict[str, Any], directory: Path) -> dict[str, Any]: ...
+    def quota(self, request_ids: list[str], directory: Path) -> dict[str, Any]: ...
 
 
 class LocalIrisTransport:
@@ -235,3 +236,8 @@ class LocalIrisTransport:
 
     def import_baseline(self, request: dict[str, Any], directory: Path) -> dict[str, Any]:
         return self.invoke("import", request, directory)
+
+    def quota(self, request_ids: list[str], directory: Path) -> dict[str, Any]:
+        return self.invoke(
+            "quota", {"request_id": "00000000", "known_request_ids": request_ids}, directory
+        )

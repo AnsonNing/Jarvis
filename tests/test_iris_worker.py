@@ -140,3 +140,32 @@ def test_incomplete_multimonth_gate_does_not_prepare_environment(tmp_path):
     assert model_status(tmp_path)["status"] == "WAITING_FOR_MODEL_ACCEPTANCE"
     with pytest.raises(AdmissionError, match="WAITING_FOR_MODEL_ACCEPTANCE"):
         prepare_environment(tmp_path, "long", "08", Path(sys.executable))
+    (tmp_path / "workflow_state.json").write_text('{"stage":"needs_attention"}')
+    assert model_status(tmp_path)["status"] == "MODEL_ACCEPTANCE_FAILED"
+    (tmp_path / "workflow_state.json").write_text('{"stage":')
+    assert model_status(tmp_path)["status"] == "WAITING_FOR_MODEL_ACCEPTANCE"
+
+
+def test_quota_observation_is_read_only_scoped_and_keeps_original_timestamp(
+    tmp_path, iris_environment
+):
+    env, _ = local_case(iris_environment)
+    agent = Path(env.root) / "iris_agent.py"
+    agent.write_text("""
+def load_config(): return {"token":"inert-fixture-value","channel":"fixture"}
+def api(token,method,**params):
+    assert method=="files.list"
+    files=[{"name":"iris-99999999-queued.txt","created":100,"id":"unrelated"}] if params["page"]==1 else [{"name":"iris-1234abcd-queued.txt","created":200,"id":"own"}]
+    return {"files":files,"paging":{"pages":2}}
+def download(cfg,file):
+    assert file["id"]=="own"
+    return "Queued toy, today 4/100."
+""")
+    env = env.model_copy(update={"agent_script_sha256": file_digest(agent)})
+    result = LocalIrisTransport(env).quota(["1234abcd"], tmp_path / "quota")
+    assert result["status"] == "QUOTA_OBSERVED"
+    observed = result["snapshot"]
+    assert observed["used"] == 4 and observed["limit"] == 100
+    assert observed["ack_created_at"].startswith("1970-01-01T00:03:20")
+    assert not observed["authoritative_current"]
+    assert "inert-fixture-value" not in json.dumps(result)

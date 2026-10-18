@@ -31,6 +31,23 @@ class FixtureIrisTransport:
     def import_baseline(self, request: dict[str, Any], directory: Path) -> dict[str, Any]:
         raise ValueError("artificial backend cannot import observed market evidence")
 
+    def quota(self, request_ids: list[str], directory: Path) -> dict[str, Any]:
+        from datetime import UTC, datetime
+
+        return {
+            "status": "QUOTA_OBSERVED",
+            "snapshot": {
+                "schema_version": 1,
+                "kind": "IrisQuotaSnapshot",
+                "used": len(self.submissions),
+                "limit": 100,
+                "ack_created_at": datetime.now(UTC).isoformat(),
+                "request_id": self.submissions[-1] if self.submissions else "00000000",
+                "source": "SIMULATED_FIXTURE",
+                "authoritative_current": False,
+            },
+        }
+
     def collect(self, request: dict[str, Any], directory: Path) -> dict[str, Any]:
         # This artificial objective consumes only toy constants. It is not a
         # model of trading, prices, cancellation or the actual private strategy.

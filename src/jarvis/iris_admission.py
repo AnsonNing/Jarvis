@@ -26,12 +26,32 @@ def model_status(folder: Path) -> dict[str, Any]:
         "analysis.json",
     ]
     reasons = []
+    loaded: dict[str, Any] = {}
     for name in required:
         if not (folder / name).is_file():
             reasons.append("missing " + name)
+        else:
+            try:
+                loaded[name] = json.loads((folder / name).read_text())
+            except (OSError, ValueError):
+                reasons.append("incomplete or unreadable " + name)
+    stage = loaded.get("workflow_state.json", {}).get("stage")
+    manifest = loaded.get("manifest.json", {})
+    progress = {
+        "upstream_stage": stage,
+        "completed_cases": sum(c.get("status") == "completed" for c in manifest.get("cases", [])),
+    }
+    failed = stage == "needs_attention" or any(
+        v.get("status") in {"FAIL", "FAILED", "REJECTED"} for v in loaded.values()
+    )
+    if failed:
+        return {
+            "status": "MODEL_ACCEPTANCE_FAILED",
+            "reasons": [*reasons, "upstream workflow or acceptance requires attention"],
+            **progress,
+        }
     if reasons:
-        return {"status": "WAITING_FOR_MODEL_ACCEPTANCE", "reasons": reasons}
-    loaded = {n: json.loads((folder / n).read_text()) for n in required}
+        return {"status": "WAITING_FOR_MODEL_ACCEPTANCE", "reasons": reasons, **progress}
     if loaded["workflow_state.json"].get("stage") != "complete":
         reasons.append("upstream workflow has not completed")
     for name in required[2:]:

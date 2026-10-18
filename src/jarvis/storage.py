@@ -150,11 +150,14 @@ class Store:
             conn.close()
 
     @contextlib.contextmanager
-    def campaign_lock(self, campaign_id: str) -> Iterator[None]:
+    def campaign_lock(self, campaign_id: str, *, scope: str | None = None) -> Iterator[None]:
         self.manifest(campaign_id)
+        if scope is not None and not re.fullmatch(r"[a-z-]+", scope):
+            raise JarvisError("invalid coordinator lock scope")
         locks = self.root / "locks"
         locks.mkdir(exist_ok=True, mode=0o700)
-        with (locks / f"{campaign_id}.lock").open("a") as stream:
+        suffix = "-" + scope if scope else ""
+        with (locks / f"{campaign_id}{suffix}.lock").open("a") as stream:
             try:
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
