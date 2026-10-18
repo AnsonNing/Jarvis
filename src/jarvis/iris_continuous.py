@@ -47,6 +47,7 @@ class IrisContinuousSpec(Record):
     owner_instruction: str = Field(min_length=1, max_length=6000)
     directions: tuple[str, ...] = Field(min_length=1, max_length=12)
     agent: AgentConfig = AgentConfig(reserve_tokens=65536, max_calls=3, timeout_seconds=180)
+    critic: AgentConfig | None = None
     rounds_per_program: int = Field(default=3, ge=1, le=8, strict=True)
     max_experiments_per_batch: int = Field(default=2, ge=1, le=3, strict=True)
     primary_metric: Literal["entry_only_pl"] = "entry_only_pl"
@@ -260,6 +261,7 @@ class IrisContinuousStudy:
             queue=q,
             directions=spec.directions,
             agent=cfg,
+            critic=spec.critic,
             max_direction_batches=rounds,
             experiments_per_batch=1
             if phase == "smoke"
@@ -343,6 +345,11 @@ class IrisContinuousStudy:
                         if b["batch"]["stop_reason"]
                     ]
                     failures = [r for r in candidates if r["result"]["status"] != "SUCCEEDED"]
+                    critic_stops = [
+                        r["review"]["summary"]
+                        for r in report["critic_reviews"]
+                        if r["review"]["stop_recommended"]
+                    ]
                     if failures:
                         self.store.append(
                             owner,
@@ -358,13 +365,14 @@ class IrisContinuousStudy:
                             "study_id": owner,
                             "program_id": pid,
                         }
-                    if (stops and phase == "development") or not valid:
+                    if critic_stops or (stops and phase == "development") or not valid:
                         self.store.append(
                             owner,
                             "IRIS_TRACK_STOPPED",
                             {
                                 "track": track.label,
-                                "reason": stops
+                                "reason": critic_stops
+                                or stops
                                 or "no novel executable hypothesis; capability review required",
                                 "program_id": pid,
                             },
@@ -385,6 +393,14 @@ class IrisContinuousStudy:
             "IRIS_CONTINUOUS_STEP",
             {"track": track.label, "phase": phase, "program_id": pid, "progress": progress},
         )
+        if progress["status"] in {"CRITIC_NEEDS_ATTENTION", "BUDGET_EXHAUSTED"}:
+            self.store.set_status(owner, "NEEDS_RECONCILIATION")
+            return {
+                **progress,
+                "status": "NEEDS_RECONCILIATION",
+                "program_status": progress["status"],
+                "study_id": owner,
+            }
         if progress["status"] in {
             "NEEDS_RECONCILIATION",
             "PAUSED",
@@ -538,6 +554,7 @@ def prepare_continuous(
         tracks.append(IrisResearchTrack(label=side, smoke=queues[0], development=queues[1]))
     return IrisContinuousSpec(
         tracks=tuple(tracks),
+        critic=AgentConfig(reserve_tokens=65536, max_calls=6, timeout_seconds=180),
         owner_instruction=owner_instruction,
         quota_policy=IrisQuotaPolicy(
             scope=digest({"iris_runtime": str(upstream.resolve().parents[1])})

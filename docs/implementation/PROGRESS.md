@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-18. Release: 0.8.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, standing-authorized continuous Iris research, closed strategy-design interventions and execution-free preparation are available.
+Date: 2026-10-18. Release: 0.9.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, continuous Iris research, closed strategy design, execution-free preparation and independent proposal/result critique are available.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -22,10 +22,11 @@ Date: 2026-10-18. Release: 0.8.0. Synthetic Dream-RSI, Hermes baseline admission
 | P7 continuous Iris research | VERIFIED_WITH_LIMITATIONS | Rolling bounded programs under standing owner authorization, shared conservative quota, cross-program candidate deduplication, rejection feedback, original-server-time acknowledgement reads and one persistent admission watcher; thirteen artificial executions span five programs, with zero remote submissions |
 | P8 strategy-design rules | VERIFIED_WITH_LIMITATIONS | Typed all/any entry/cancel predicates, session clocks, quantity and position limits; owner-pinned source bindings and compile receipts; five compiled artificial executions across two adaptive epochs preserve positive/negative findings; quiescent predecessor handoff retains histories and shared quota |
 | P9 research readiness | VERIFIED_WITH_LIMITATIONS | Explicit logical-case replacement proof, retained unknown requests, completed-findings attention state, owner-bound development-use records and store-free readiness; stopped unstarted watchers remain stopped; four supplied baseline ledgers recomputed and four source compilations passed locally, with no new research/LLM/backend submission |
+| P10 independent Critic | VERIFIED_WITH_LIMITATIONS | Two-stage separate provider calls, approval-before-enqueue, result critique, causal next-round feedback, receipt recovery, shared budgets and continuous stop propagation; two artificial epochs and a real three-call LLM/artificial-backend acceptance completed. No new real Hermes research or efficiency-gain claim |
 
-Validation after research preparation changes: **194 tests passed in
-85.40s**, Ruff lint/format passed for 80 Python
-files and mypy passed for 58 source modules. Schema export, task CLI and complete local
+Validation after independent Critic integration: **214 tests passed in
+89.72s**, Ruff lint/format passed for 83 Python
+files and mypy passed for 60 source modules. Schema export, task CLI and complete local
 synthetic/Hermes workflows. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.

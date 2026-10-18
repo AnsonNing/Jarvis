@@ -77,6 +77,9 @@ def add_commands(commands: Any) -> None:
     design_fixture = research.add_parser("design-fixture")
     design_fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
     design_fixture.add_argument("--executable", default="codex")
+    critic_fixture = research.add_parser("critic-fixture")
+    critic_fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
+    critic_fixture.add_argument("--executable", default="codex")
     research.add_parser("start").add_argument("spec", type=Path)
     prepare = research.add_parser("prepare")
     prepare.add_argument("--environment", type=Path, required=True)
@@ -132,6 +135,10 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "research" and args.operation == "critic-fixture":
+        from jarvis.critic_fixture import run_critic_fixture
+
+        return run_critic_fixture(store, agent=args.agent, executable=args.executable)
     if args.command == "research" and args.operation == "design-fixture":
         from jarvis.iris_design_fixture import run_design_fixture
 
@@ -303,6 +310,12 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
                 agent=AgentConfig(
                     executable=args.executable,
                     max_calls=args.batches,
+                    reserve_tokens=65536,
+                    timeout_seconds=180,
+                ),
+                critic=AgentConfig(
+                    executable=args.executable,
+                    max_calls=2 * args.batches,
                     reserve_tokens=65536,
                     timeout_seconds=180,
                 ),

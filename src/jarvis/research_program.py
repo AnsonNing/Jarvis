@@ -15,7 +15,13 @@ from jarvis.iris_contracts import IrisExperiment, IrisQueueSpec
 from jarvis.iris_design import design_capabilities
 from jarvis.providers import CodexProvider, ResearchProvider
 from jarvis.research_queue import IrisResearchQueue, queue_tasks, verify_queue, visible_results
-from jarvis.research_roles import DirectionBatch, RoleCaller, strict_schema, verify_roles
+from jarvis.research_roles import (
+    DirectionBatch,
+    RoleCaller,
+    role_resources,
+    strict_schema,
+    verify_roles,
+)
 from jarvis.researcher import AgentConfig
 from jarvis.storage import Store
 
@@ -25,6 +31,7 @@ class ResearchProgramSpec(Record):
     queue: IrisQueueSpec
     directions: tuple[str, ...] = Field(min_length=1, max_length=12)
     agent: AgentConfig = AgentConfig(reserve_tokens=65536, max_calls=4)
+    critic: AgentConfig | None = None
     max_direction_batches: int = Field(default=3, ge=1, le=8, strict=True)
     experiments_per_batch: int = Field(default=3, ge=1, le=3, strict=True)
     llm_token_budget: int = Field(default=300000, ge=65536, le=1000000, strict=True)
@@ -93,6 +100,29 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
             for r in results
         ],
         "objective_boundary": "No independent strategy verdict on exposed periods; existing models/strategy are owner supplied, not agent discoveries",
+        **(
+            {
+                "fixed_controls": {
+                    "source_sha256": spec.queue.environment.template_sha256,
+                    "evaluator_sha256": spec.queue.environment.evaluator_sha256,
+                    "model_lineage": spec.queue.environment.model_lineage,
+                    "period": spec.queue.environment.period.model_dump(mode="json"),
+                    "result_origin": spec.queue.environment.result_origin,
+                    "baseline_origin": "owner_provided",
+                    "comparator": "frozen_baseline",
+                },
+                "critic_feedback": [
+                    {
+                        "review_ref": e["payload"]["review_ref"],
+                        "review": store.artifacts.get(e["payload"]["review_ref"]),
+                    }
+                    for e in store.events(program)
+                    if e["event_type"] == "CRITIC_REVIEW_RECORDED"
+                ],
+            }
+            if spec.critic
+            else {}
+        ),
     }
 
 
@@ -103,21 +133,31 @@ class ResearchProgram:
         *,
         provider_factory: Callable[[AgentConfig], ResearchProvider] = CodexProvider,
         transport_factory: Callable[..., IrisTransport] = LocalIrisTransport,
+        critic_provider_factory: Callable[[AgentConfig], ResearchProvider] | None = None,
     ):
         self.store = store
         self.provider_factory = provider_factory
+        self.critic_provider_factory = critic_provider_factory or provider_factory
         self.queue = IrisResearchQueue(store, transport_factory)
 
     def create(self, spec: ResearchProgramSpec) -> str:
         # No provider call. Queue validation/admission occurs before attaching a child.
         self.queue.transport_factory(spec.queue.environment)
         provider = self.provider_factory(spec.agent).identity()
+        critic_identity = (
+            {"critic_provider": self.critic_provider_factory(spec.critic).identity()}
+            if spec.critic
+            else {}
+        )
         return self.store.create(
             {
                 "kind": "ResearchProgram",
                 "spec": spec.model_dump(mode="json"),
-                "world_id": digest({"spec": spec.model_dump(mode="json"), "provider": provider}),
+                "world_id": digest(
+                    {"spec": spec.model_dump(mode="json"), "provider": provider, **critic_identity}
+                ),
                 "provider": provider,
+                **critic_identity,
                 "task": {
                     "budget": Budget(
                         max_llm_tokens=spec.llm_token_budget,
@@ -139,12 +179,25 @@ class ResearchProgram:
             origin="human_provided",
         )
 
-    def _admit(self, program: str, qid: str, prepared: dict[str, Any]) -> None:
+    def _admit(
+        self, program: str, qid: str, prepared: dict[str, Any], *, review_ref: str | None = None
+    ) -> None:
         raw = DirectionBatch.model_validate(self.store.artifacts.get(prepared["batch_ref"]))
+        review = self.store.artifacts.get(review_ref) if review_ref else None
         accepted = []
         rejected = []
         for proposal in raw.experiments:
             try:
+                if review and (
+                    review["stop_recommended"]
+                    or next(
+                        a["verdict"]
+                        for a in review["assessments"]
+                        if a["experiment_ref"] == digest(proposal)
+                    )
+                    != "approve"
+                ):
+                    raise AdmissionError("independent Critic requires revision or rejection")
                 if proposal.origin != "agent_proposed" or proposal.family == "baseline":
                     raise AdmissionError("direction role must propose a new candidate")
                 task_id = self.queue.enqueue(
@@ -171,6 +224,7 @@ class ResearchProgram:
                 "rejected": rejected,
                 "stop_reason": raw.stop_reason,
                 "capability_requests": raw.capability_requests,
+                **({"critic_review_ref": review_ref} if review_ref else {}),
             },
         )
 
@@ -181,6 +235,10 @@ class ResearchProgram:
             return {"program_id": program, "status": "CLOSED"}
         if manifest["source_identity"] != source_identity():
             raise IntegrityError("research program runtime changed")
+        if spec.critic:
+            from jarvis.research_critic import advance_reviewed_program
+
+            return advance_reviewed_program(self, program)
         with self.store.campaign_lock(program):
             links = [
                 e["payload"]["queue_id"]
@@ -328,9 +386,16 @@ class ResearchProgram:
 def verify_program(store: Store, program: str) -> dict[str, Any]:
     manifest = store.manifest(program)
     spec = ResearchProgramSpec.model_validate(manifest["spec"])
-    if manifest["world_id"] != digest({"spec": manifest["spec"], "provider": manifest["provider"]}):
+    identity = {"spec": manifest["spec"], "provider": manifest["provider"]}
+    if spec.critic:
+        identity["critic_provider"] = manifest["critic_provider"]
+    if manifest["world_id"] != digest(identity):
         raise IntegrityError("program specification changed")
     verify_roles(store, program)
+    if spec.critic:
+        from jarvis.research_critic import verify_reviewed_program
+
+        return verify_reviewed_program(store, program)
     events = store.events(program)
     links: list[str] = []
     completed_refs: dict[str, DirectionBatch] = {}
@@ -461,7 +526,24 @@ def program_report(store: Store, program: str) -> dict[str, Any]:
             if e["event_type"] == "PROGRAM_WORLD_COLLECTED"
         ],
         "research_usage": [store.resource_totals(q) for q in links],
-        "direction_usage": store.resource_totals(program),
+        "direction_usage": role_resources(store, program, "direction"),
+        "critic_usage": role_resources(store, program, "critic"),
+        "llm_usage": store.resource_totals(program),
+        "role_calls": {
+            role: sum(
+                e["event_type"] == "ROLE_COMPLETED" and e["payload"]["role"] == role
+                for e in store.events(program)
+            )
+            for role in ["direction", "critic"]
+        },
+        "review_policy": "independent pre-admission veto and post-result advice; fixed numeric evaluator"
+        if spec.critic
+        else "legacy combined direction role",
+        "critic_reviews": [
+            {**e["payload"], "review": store.artifacts.get(e["payload"]["review_ref"])}
+            for e in store.events(program)
+            if e["event_type"] == "CRITIC_REVIEW_RECORDED"
+        ],
         "formal_strategy_validation": "NOT_RUN",
         "deployment": "NOT_RUN",
     }

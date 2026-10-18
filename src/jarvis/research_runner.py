@@ -41,6 +41,8 @@ def run_program(
             "AWAITING_SUBMISSION_AUTHORIZATION",
             "SUBMISSION_LIMIT",
             "NEEDS_RECONCILIATION",
+            "CRITIC_NEEDS_ATTENTION",
+            "BUDGET_EXHAUSTED",
             "BASELINE_NOT_VERIFIED",
             "INVALID_RESULT",
             "FAILED",

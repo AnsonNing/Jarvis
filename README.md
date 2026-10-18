@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.8 adds preparation-only readiness, owner-selected development baselines with retained findings, verified logical-case replacements and durable watcher cancellation. Closed strategy-design rules, trading schedules and position/quantity settings extend continuous, quota-aware Iris research. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.9 adds an independent Critic to reviewed research programs: separate calls review hypotheses and experimental design before admission, then inspect results, risks and conclusions before the next epoch. Preparation-only readiness, owner-selected development baselines, verified replacements and durable watcher cancellation remain available. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -13,9 +13,12 @@ policy validation. Start without external Iris access:
 ```sh
 jarvis --store .jarvis/strategy-fixture research fixture
 jarvis --store .jarvis/hermes-dream-fixture hermes-dream fixture
+# Independent proposal/result critique on an artificial objective:
+jarvis --store .jarvis/critic-fixture research critic-fixture
 # Real LLM research on artificial objectives; still zero remote Iris submissions:
 jarvis --store .jarvis/strategy-llm-fixture research fixture --agent codex
 jarvis --store .jarvis/policy-llm-fixture hermes-dream fixture --agent codex
+jarvis --store .jarvis/critic-llm-fixture research critic-fixture --agent codex
 ```
 
 Artificial outcomes always carry `SIMULATED_FIXTURE`. The deliberate shifted
@@ -44,6 +47,12 @@ private models, baselines and controls without creating a study or calling a
 provider/backend. An explicit owner-bound development-use record retains known
 findings on exposed data; it grants no execution permission or independent-test
 claim. Cancelled or attention states do not restart automatically.
+
+[Independent Critic](docs/implementation/P10-independent-critic.md) reviews new
+prepared programs in two stages. A proposal needing revision cannot execute;
+result critiques and negative evidence inform the next Director. Old saved
+programs retain their original role contract. Adding a Critic does not establish
+an efficiency gain or activate real research.
 
 ## Run locally
 
