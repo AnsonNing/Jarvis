@@ -61,3 +61,19 @@ baseline reproduction and independent entry accounting are admission gates.
 This event backend is not implemented using guessed timestamps. Remote backtest
 submission, model retraining, fresh strategy validation and live policy promotion
 are not performed by the local quote simulator or prefill comparisons.
+
+## Remote Iris parameter research
+
+Version 0.5 adds an independent Iris adapter to execute owner-approved numeric
+stop/target, model/heuristic cancellation, entry cutoff and timing interventions
+inside the supplied strategy's writable regions. It pins a fully accepted model
+package, requires a finite submission grant and independently recomputes entry-only
+metrics over an explicit calendar. It can reuse an existing verified raw baseline
+without any upload. See [Iris research](../implementation/P6-iris-and-hermes-dream.md).
+
+The adapter reports `OBSERVED_IRIS_BACKTEST` only for verified backend ledgers.
+These are simulated executions observed from Iris, not observed market fills.
+Iris parameter availability does not supply the missing postfill paths, all-order
+ledger or acknowledgement semantics to the separate local replay interfaces.
+Intraday drawdown, complete costs, capacity and hard per-trade loss limits remain
+unverified. A remote PL improvement on an exposed month is development evidence.

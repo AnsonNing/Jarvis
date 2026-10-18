@@ -2,9 +2,26 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.4 adds an explicit new Hermes frozen-baseline adapter, causal multi-round evidence reuse, controlled prefill cancellation rules and a quote-based exit simulation contract. The synthetic Dream-RSI study includes branching histories, restricted policy proposals, independent validation, fresh paired campaigns, policy versions and rollback. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.5 adds a private Iris adapter, a durable research queue, concurrent direction planning and Hermes Dream-RSI. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
+
+The [Iris research guide](docs/implementation/P6-iris-and-hermes-dream.md) describes
+model acceptance, baseline reuse, submission budgets, multi-round research and
+policy validation. Start without external Iris access:
+
+```sh
+jarvis --store .jarvis/strategy-fixture research fixture
+jarvis --store .jarvis/hermes-dream-fixture hermes-dream fixture
+# Real LLM research on artificial objectives; still zero remote Iris submissions:
+jarvis --store .jarvis/strategy-llm-fixture research fixture --agent codex
+jarvis --store .jarvis/policy-llm-fixture hermes-dream fixture --agent codex
+```
+
+Artificial outcomes always carry `SIMULATED_FIXTURE`. The deliberate shifted
+canary exercises rollback. A real Iris study needs a completed accepted model
+package and an explicit finite submission envelope. August/September results
+already seen during model development remain retrospective research data.
 
 ## Run locally
 

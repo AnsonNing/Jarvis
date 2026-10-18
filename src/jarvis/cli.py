@@ -66,6 +66,9 @@ def parser() -> argparse.ArgumentParser:
         "--store", type=Path, default=Path(".jarvis"), help="Private local evidence directory"
     )
     commands = p.add_subparsers(dest="command", required=True)
+    from jarvis.iris_cli import add_commands as add_iris_commands
+
+    add_iris_commands(commands)
     task = commands.add_parser("task").add_subparsers(dest="operation", required=True)
     task.add_parser("validate").add_argument("path", type=Path)
     schema = commands.add_parser("schema")
@@ -149,10 +152,15 @@ def run(args: argparse.Namespace) -> None:
             dream,
             exit_replay,
             exploration,
+            hermes_dream,
+            hermes_policy,
             hermes_study,
+            iris_contracts,
             new_research,
             policy,
             pool,
+            research_program,
+            research_roles,
             researcher,
             search_space,
             suite,
@@ -170,6 +178,11 @@ def run(args: argparse.Namespace) -> None:
             exploration,
             exit_replay,
             hermes_study,
+            hermes_dream,
+            hermes_policy,
+            iris_contracts,
+            research_program,
+            research_roles,
             pool,
             search_space,
             suite,
@@ -188,6 +201,11 @@ def run(args: argparse.Namespace) -> None:
 
     store = Store(args.store)
     engine = CampaignEngine(store)
+    if args.command in {"iris", "research", "hermes-dream"}:
+        from jarvis.iris_cli import run as iris_run
+
+        emit(iris_run(store, args))
+        return
     if args.command == "hermes":
         if args.operation.startswith("study"):
             from jarvis.hermes_study import HermesStudy, HermesStudySpec, verify_hermes_study
