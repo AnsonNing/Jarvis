@@ -144,7 +144,9 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
                 raise IntegrityError("agent receipt/usage settlement mismatch")
             if payload.get("turn_ref"):
                 turn = parse_turn(store.artifacts.get(payload["turn_ref"]))
-                if digest(turn) != digest(receipt["answer"]):
+                # Preserve raw provider JSON, but compare both through the same
+                # admitted schema (e.g. JSON 1000 and typed 1000.0 are equivalent).
+                if digest(turn) != digest(parse_turn(receipt["answer"])):
                     raise IntegrityError("agent proposal differs from the observed provider answer")
                 accepted_agents[job_id] = payload["turn_ref"]
                 research_digests.add(digest(turn))

@@ -39,3 +39,26 @@ Current study scope is exposed calibration development, not independent strategy
 validation or Dream-RSI policy promotion. The quote contract has artificial tests;
 real exits still require complete postfill data. Full cancellation acknowledgement
 and fill-race replay require another backend. No training or external submission.
+
+The actual run exposed an integer/float normalization defect in transcript audit:
+a valid JSON integer waiting time was parsed as its declared float, then compared
+to raw JSON hashes. Audit now compares both through the admitted versioned schema,
+retaining raw receipts unchanged. Actual previously completed histories reverified
+without provider dispatch. New-baseline Markdown report rendering also handles
+the explicit-artifact format without requiring a legacy README match field.
+
+`study-upgrade` records source/commit provenance at a settled round boundary. It
+requires CLOSED children, known settled receipts, sealed reports and unchanged
+baseline inputs. Original child worlds are retained. The study lineage verifier
+checks the runtime chain and the source admitted when each subsequent child was
+created. Active/uncertain children cannot cross this boundary; completed rounds
+are audited rather than executed again. An already completed study can be audited
+from a newer runtime without starting a provider or tool.
+
+After the audit/recovery correction, executed full `pytest -q`: **122 passed in
+41.50s**, plus Ruff lint/format and mypy. The synthetic provider intentionally
+returns integer waiting times to exercise raw/typed normalization. A source-change
+test requires explicit upgrade, preserves the first round, runs only the remaining
+round and verifies the combined history offline. Active or pending child jobs
+reject runtime upgrades. Both actual histories that exposed the defect were
+reverified without new provider calls before continuing.

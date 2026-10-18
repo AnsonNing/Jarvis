@@ -184,7 +184,7 @@ def render_markdown(value: dict[str, Any]) -> str:
                     [
                         f"Source: {finding['source_rows']:,} rows; {finding['feature_slots']} feature slots.",
                         f"Declared policy: `{finding['selected_policy']['variant']} / {finding['selected_policy']['pair']}`.",
-                        f"README matches current model metadata: {finding['readme_pair_matches_metadata']}.",
+                        f"README matches current model metadata: {finding.get('readme_pair_matches_metadata', 'not applicable to explicitly selected new artifacts')}.",
                         "",
                     ]
                 )

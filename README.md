@@ -70,6 +70,9 @@ jarvis hermes study --root "$HERMES_ROOT" --side long \
 jarvis hermes study-resume <study-id>
 jarvis hermes study-verify <study-id>
 jarvis hermes study-report <study-id>
+# After an implementation fix, an explicit source upgrade is allowed only when
+# every already-started child is CLOSED with known receipts and settled costs:
+jarvis hermes study-upgrade <study-id>
 ```
 
 The new adapter supports cancellation risk deltas, minimum prefill order age and

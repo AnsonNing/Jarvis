@@ -383,8 +383,13 @@ def test_two_round_study_reviews_only_earlier_receipts_and_resumes_without_calls
                 next_direction="STOP" if choice == "stop" else "CONTINUE",
                 limitations=("Fixture only",),
             )
+            raw_answer = answer.model_dump(mode="json")
+            if choice == "cancel_experiment":
+                raw_answer["experiment"]["parameters"]["min_order_age_ms"] = int(
+                    params.min_order_age_ms
+                )
             return {
-                "answer": answer.model_dump(mode="json"),
+                "answer": raw_answer,
                 "usage": {"input_tokens": 100, "output_tokens": 20},
                 "cost": Cost(llm_tokens=120, wall_seconds=0.01).model_dump(),
                 "error": None,
@@ -407,11 +412,23 @@ def test_two_round_study_reviews_only_earlier_receipts_and_resumes_without_calls
         study.run(sid, fault="after_round")
     calls = len(provider.calls)
     assert calls == 4
+    import jarvis.campaign as campaign_module
+    import jarvis.hermes_study as study_module
+    from jarvis.reporting import render_markdown, report
+
+    monkeypatch.setattr(campaign_module, "source_identity", lambda: "fixture-runtime-upgraded")
+    monkeypatch.setattr(study_module, "source_identity", lambda: "fixture-runtime-upgraded")
+    with pytest.raises(IntegrityError, match="runtime changed"):
+        study.run(sid)
+    upgrade = study.admit_runtime_upgrade(sid)
+    assert upgrade["closed_rounds"][0]["campaign_id"]
+    assert len(provider.calls) == calls
     ref = study.run(sid)
     value = store.artifacts.get(ref)
     assert value["status"] == "CLOSED"
     assert value["actual"]["llm_tokens"] == 9 * 120
     assert not any(value["pending"].values())
+    assert "not applicable" in render_markdown(report(store, value["rounds"][0]["campaign_id"]))
     review = next(
         c
         for c in provider.calls
@@ -456,3 +473,29 @@ def test_two_round_study_reviews_only_earlier_receipts_and_resumes_without_calls
     assert verify_hermes_study(store, sid)["status"] == "VERIFIED"
     assert study.run(sid) == ref
     assert len(provider.calls) == 9
+
+
+def test_runtime_upgrade_refuses_active_or_unsettled_children(new_baseline, tmp_path, monkeypatch):
+    import jarvis.hermes_study as module
+    from jarvis.contracts import Cost, JarvisError
+    from jarvis.hermes_study import HermesStudy, HermesStudySpec
+
+    root, out, ledger = new_baseline
+    store = Store(tmp_path / "upgrade")
+    study = HermesStudy(store)
+    sid = study.create(
+        HermesStudySpec(root=str(root), side="long", artifacts=str(out), ledger_root=str(ledger))
+    )
+    adapter = NewBaselineAdapter(root, "long", out, ledger)
+    cid = study.engine.create(adapter.task(), adapter)
+    store.append(
+        sid, "HERMES_ROUND_REGISTERED", {"index": 0, "campaign_id": cid, "prior_context_ref": None}
+    )
+    monkeypatch.setattr(module, "source_identity", lambda: "another-runtime")
+    with pytest.raises(JarvisError, match="fully settled"):
+        study.admit_runtime_upgrade(sid)
+    store.reserve(cid, {"world_id": store.manifest(cid)["world_id"]}, Cost(tool_calls=1))
+    store.set_status(cid, "CLOSED")
+    with pytest.raises(JarvisError, match="fully settled"):
+        study.admit_runtime_upgrade(sid)
+    assert not any(e["event_type"] == "HERMES_STUDY_RUNTIME_UPGRADED" for e in store.events(sid))

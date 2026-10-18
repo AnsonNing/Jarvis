@@ -75,6 +75,49 @@ def prior_findings(store: Store, campaigns: list[str], metadata_hash: str) -> di
     }
 
 
+def runtime_lineage(store: Store, study_id: str) -> str:
+    """Audit explicit runtime upgrades only at fully settled round boundaries."""
+    manifest = store.manifest(study_id)
+    active = str(manifest["source_identity"])
+    registered: list[str] = []
+    for event in store.events(study_id):
+        payload = event["payload"]
+        if event["event_type"] == "HERMES_ROUND_REGISTERED":
+            cid = payload["campaign_id"]
+            if payload["index"] != len(registered) or cid in registered:
+                raise IntegrityError("duplicate or unordered Hermes round")
+            if store.manifest(cid)["world"]["engine_source"] != active:
+                raise IntegrityError("round runtime differs from the admitted study version")
+            registered.append(cid)
+        if event["event_type"] == "HERMES_STUDY_RUNTIME_UPGRADED":
+            if (
+                payload["from_source"] != active
+                or payload["code_provenance"]["source_identity"] != payload["to_source"]
+            ):
+                raise IntegrityError("study runtime upgrade chain differs")
+            expected = []
+            for cid in registered:
+                closed = [
+                    e
+                    for e in store.events(cid)
+                    if e["event_type"] == "STATUS" and e["payload"]["status"] == "CLOSED"
+                ]
+                if (
+                    not closed
+                    or closed[-1]["recorded_at_utc"] > event["recorded_at_utc"]
+                    or any(not j["finalized"] or not j["actual"] for j in store.jobs(cid))
+                ):
+                    raise IntegrityError("runtime upgrade crossed an unsettled round")
+                value = report(store, cid)
+                ref = digest(value)
+                store.artifacts.get(ref)
+                expected.append({"campaign_id": cid, "report_ref": ref})
+            if payload["closed_rounds"] != expected or not expected:
+                raise IntegrityError("runtime upgrade lacks sealed completed-round evidence")
+            active = payload["to_source"]
+    return active
+
+
 class HermesStudy:
     def __init__(
         self,
@@ -108,11 +151,50 @@ class HermesStudy:
             }
         )
 
+    def admit_runtime_upgrade(self, study_id: str) -> dict[str, Any]:
+        """Explicit local migration; never alters a child world or resends a job."""
+        with self.store.campaign_lock(study_id):
+            manifest = self.store.manifest(study_id)
+            if manifest["kind"] != "RealHermesStudy":
+                raise IntegrityError("not a Hermes study")
+            before = runtime_lineage(self.store, study_id)
+            current = source_identity()
+            if before == current:
+                raise JarvisError("study already admits the current runtime")
+            spec = HermesStudySpec.model_validate(manifest["spec"])
+            clean = NewBaselineAdapter(
+                Path(spec.root), spec.side, Path(spec.artifacts), Path(spec.ledger_root)
+            )
+            clean.validate(clean.task())
+            if clean.hashes() != manifest["baseline_hashes"]:
+                raise IntegrityError("cannot upgrade a study with changed baseline inputs")
+            closed = []
+            for event in self.store.events(study_id):
+                if event["event_type"] != "HERMES_ROUND_REGISTERED":
+                    continue
+                cid = event["payload"]["campaign_id"]
+                if self.store.status(cid) != "CLOSED" or any(
+                    not j["finalized"] or not j["actual"] for j in self.store.jobs(cid)
+                ):
+                    raise JarvisError("runtime upgrade requires fully settled CLOSED children")
+                value = report(self.store, cid)
+                closed.append({"campaign_id": cid, "report_ref": self.store.artifacts.put(value)})
+            if not closed:
+                raise JarvisError("no completed round to preserve; create a new study")
+            value = {
+                "from_source": before,
+                "to_source": current,
+                "code_provenance": code_provenance(),
+                "closed_rounds": closed,
+                "semantics": "Completed worlds retained; only subsequent child campaigns use the admitted runtime. No provider/tool resubmission.",
+            }
+            self.store.append(study_id, "HERMES_STUDY_RUNTIME_UPGRADED", value)
+            runtime_lineage(self.store, study_id)
+            return value
+
     def run(self, study_id: str, *, fault: str | None = None) -> str:
         with self.store.campaign_lock(study_id):
             manifest = self.store.manifest(study_id)
-            if manifest["source_identity"] != source_identity():
-                raise IntegrityError("Hermes study runtime changed; create a new study")
             previous = [
                 e
                 for e in self.store.events(study_id)
@@ -122,6 +204,10 @@ class HermesStudy:
                 ref = str(previous[0]["payload"]["report_ref"])
                 verify_hermes_study(self.store, study_id)
                 return ref
+            if runtime_lineage(self.store, study_id) != source_identity():
+                raise IntegrityError(
+                    "Hermes study runtime changed; explicitly admit a settled-round upgrade or create a new study"
+                )
             spec = HermesStudySpec.model_validate(manifest["spec"])
             clean = NewBaselineAdapter(
                 Path(spec.root), spec.side, Path(spec.artifacts), Path(spec.ledger_root)
@@ -177,7 +263,9 @@ class HermesStudy:
                         "HERMES_ROUND_REGISTERED",
                         {"index": index, "campaign_id": cid, "prior_context_ref": prior_ref},
                     )
-                status = self.engine.run(cid)
+                status = self.store.status(cid)
+                if status != "CLOSED":
+                    status = self.engine.run(cid)
                 if status == "NEEDS_RECONCILIATION":
                     self.store.set_status(study_id, status)
                     raise JarvisError(
@@ -247,6 +335,7 @@ class HermesStudy:
 def verify_hermes_study(store: Store, study_id: str) -> dict[str, Any]:
     manifest = store.manifest(study_id)
     spec = HermesStudySpec.model_validate(manifest["spec"])
+    runtime_lineage(store, study_id)
     events = store.events(study_id)
     final = [e for e in events if e["event_type"] == "HERMES_STUDY_COMPLETED"]
     if len(final) != 1:

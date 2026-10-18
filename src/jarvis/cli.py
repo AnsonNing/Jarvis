@@ -125,7 +125,7 @@ def parser() -> argparse.ArgumentParser:
     study.add_argument("--side", choices=["long", "short"], required=True)
     study.add_argument("--rounds", type=int, default=2)
     agent_options(study)
-    for op in ("study-resume", "study-verify", "study-report"):
+    for op in ("study-resume", "study-verify", "study-report", "study-upgrade"):
         sub = hermes.add_parser(op)
         sub.add_argument("study_id")
     exit_parser = hermes.add_parser("exit-replay")
@@ -222,6 +222,8 @@ def run(args: argparse.Namespace) -> None:
                 emit({**store.artifacts.get(ref), "report_ref": ref})
             elif args.operation == "study-verify":
                 emit(verify_hermes_study(store, args.study_id))
+            elif args.operation == "study-upgrade":
+                emit(study.admit_runtime_upgrade(args.study_id))
             else:
                 checked = verify_hermes_study(store, args.study_id)
                 emit(
