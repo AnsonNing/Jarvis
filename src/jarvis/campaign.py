@@ -161,6 +161,16 @@ class CampaignEngine:
         from jarvis.hermes import HermesAdapter
 
         config = manifest["local_adapter"]
+        if config.get("format") == "cotrain_controls_v1":
+            from jarvis.hermes_new import NewBaselineAdapter
+
+            return NewBaselineAdapter(
+                Path(config["root"]),
+                config["side"],
+                Path(config["artifacts"]),
+                Path(config["ledger_root"]),
+                Path(config["prior_context"]) if config.get("prior_context") else None,
+            )
         return HermesAdapter(
             Path(config["root"]),
             config["side"],

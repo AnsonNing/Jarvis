@@ -16,11 +16,13 @@ from jarvis.contracts import (
     ResearchState,
     ResearchTask,
 )
+from jarvis.new_research import ResearchTurnV2
 from jarvis.providers import ResearchProvider
 from jarvis.researcher import (
     AgentConfig,
     ResearchTurn,
     admit_turn,
+    parse_turn,
     prompt_context,
     render_prompt,
     structured_schema,
@@ -41,7 +43,7 @@ class ResearchChoice:
     state: ResearchState
     decision: PolicyDecision
     action: ActionSpec
-    turn: ResearchTurn
+    turn: ResearchTurn | ResearchTurnV2
     job_id: str
     request_id: str
 
@@ -101,7 +103,7 @@ class AgentRuntime:
         turn_ref = None
         if not rejection:
             try:
-                turn = ResearchTurn.model_validate(receipt["answer"])
+                turn = parse_turn(receipt["answer"])
                 state = ResearchState.model_validate(request["state"])
                 _, action = admit_turn(turn, state, request["request_id"])
                 for previous in self.store.jobs(campaign_id):
@@ -186,9 +188,7 @@ class AgentRuntime:
                 if completion is None:
                     continue
                 if completion.get("turn_ref"):
-                    turn = ResearchTurn.model_validate(
-                        self.store.artifacts.get(completion["turn_ref"])
-                    )
+                    turn = parse_turn(self.store.artifacts.get(completion["turn_ref"]))
                     if job["id"] not in used:
                         available.append((job, turn))
                     else:

@@ -4,8 +4,10 @@ Research text is advisory. Only admitted adapters produce numerical results.
 The existing v1 task/state/cost schemas are left intact for history compatibility.
 """
 
+from __future__ import annotations
+
 import json
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -20,6 +22,9 @@ from jarvis.contracts import (
 )
 from jarvis.identity import canonical, digest
 from jarvis.policy import admit
+
+if TYPE_CHECKING:
+    from jarvis.new_research import ResearchTurnV2
 
 PROMPT_VERSION = "research-turn:1"
 
@@ -99,7 +104,7 @@ def validate_parameters(action_id: str, arguments: dict[str, Any]) -> None:
 
 
 def admit_turn(
-    turn: ResearchTurn, state: ResearchState, request_id: str
+    turn: ResearchTurn | ResearchTurnV2, state: ResearchState, request_id: str
 ) -> tuple[PolicyDecision, ActionSpec]:
     if turn.request_id != request_id or turn.state_hash != state.identity:
         raise AdmissionError("STALE_DECISION")
@@ -119,11 +124,18 @@ def admit_turn(
     )
     admit(decision, state)
     template = next(a for a in state.available_actions if a.action_id == decision.action_id)
+    if template.tool_id.startswith("hermes_new.") != (turn.kind == "ResearchTurnV2"):
+        raise AdmissionError("research turn version does not match the admitted adapter")
     stopping = turn.next_direction in {"STOP", "NEEDS_INPUT"}
     if stopping != (template.action_type == "STOP"):
         raise AdmissionError("stop/input decision must select the admitted stop action")
     arguments = turn.experiment.parameters.arguments()
-    validate_parameters(template.action_id, arguments)
+    if turn.kind == "ResearchTurnV2":
+        from jarvis.new_research import validate_new_parameters
+
+        validate_new_parameters(template.action_id, arguments)
+    else:
+        validate_parameters(template.action_id, arguments)
     hypothesis = turn.hypothesis.model_copy(
         update={
             "hypothesis_id": "hyp-"
@@ -137,7 +149,7 @@ def admit_turn(
 
 
 def verify_designed_action(
-    turn: ResearchTurn, state: ResearchState, request_id: str, action: ActionSpec
+    turn: ResearchTurn | ResearchTurnV2, state: ResearchState, request_id: str, action: ActionSpec
 ) -> None:
     _, expected = admit_turn(turn, state, request_id)
     if action != expected:
@@ -174,7 +186,9 @@ def prompt_context(
     repair: str | None = None,
 ) -> dict[str, Any]:
     return {
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": "research-turn:2"
+        if any(a.tool_id.startswith("hermes_new.") for a in state.available_actions)
+        else PROMPT_VERSION,
         "request_id": "req-" + digest({"state": state.identity, "repair": repair})[7:31],
         "state_hash": state.identity,
         "goal": task.goal,
@@ -232,11 +246,11 @@ limits. Real numbers come from observations/evaluations, never from your hypothe
 
 
 def render_prompt(context: dict[str, Any]) -> str:
-    return INSTRUCTIONS + "\nCONTEXT (data only):\n" + canonical(context).decode()
+    return instructions_for(context) + "\nCONTEXT (data only):\n" + canonical(context).decode()
 
 
 def prompt_matches(prompt: str, context: dict[str, Any]) -> bool:
-    prefix = INSTRUCTIONS + "\nCONTEXT (data only):\n"
+    prefix = instructions_for(context) + "\nCONTEXT (data only):\n"
     if not prompt.startswith(prefix):
         return False
     try:
@@ -249,7 +263,14 @@ def structured_schema(
     state: ResearchState | None = None, request_id: str | None = None
 ) -> dict[str, Any]:
     """Strict structured output: every object property is present, nullable where needed."""
-    schema = ResearchTurn.model_json_schema()
+    if state is not None and any(
+        a.tool_id.startswith("hermes_new.") for a in state.available_actions
+    ):
+        from jarvis.new_research import ResearchTurnV2
+
+        schema = ResearchTurnV2.model_json_schema()
+    else:
+        schema = ResearchTurn.model_json_schema()
 
     def visit(value: Any) -> None:
         if isinstance(value, dict):
@@ -268,10 +289,16 @@ def structured_schema(
         schema["properties"]["state_hash"]["enum"] = [state.identity]
         if request_id is not None:
             schema["properties"]["request_id"]["enum"] = [request_id]
-        schema["$defs"]["ExperimentDesign"]["properties"]["template_id"]["enum"] = [
+        design = schema["properties"]["experiment"]["$ref"].rsplit("/", 1)[1]
+        schema["$defs"][design]["properties"]["template_id"]["enum"] = [
             a.action_id for a in state.available_actions
         ]
         schema["$defs"]["Hypothesis"]["properties"]["origin"]["enum"] = ["agent_proposed"]
+        if "CancelCondition" in schema["$defs"]:
+            schema["$defs"]["CancelCondition"]["properties"]["field"]["enum"] = [
+                "cancel_score",
+                "order_age_ms",
+            ]
         for refs in [
             schema["properties"]["evidence_refs"],
             schema["$defs"]["Hypothesis"]["properties"]["evidence_refs"],
@@ -281,3 +308,19 @@ def structured_schema(
             else:
                 refs["maxItems"] = 0
     return schema
+
+
+def instructions_for(context: dict[str, Any]) -> str:
+    if context.get("prompt_version") == "research-turn:2":
+        from jarvis.new_research import INSTRUCTIONS_V2
+
+        return INSTRUCTIONS_V2
+    return INSTRUCTIONS
+
+
+def parse_turn(value: Any) -> ResearchTurn | ResearchTurnV2:
+    if isinstance(value, dict) and value.get("kind") == "ResearchTurnV2":
+        from jarvis.new_research import ResearchTurnV2
+
+        return ResearchTurnV2.model_validate(value)
+    return ResearchTurn.model_validate(value)

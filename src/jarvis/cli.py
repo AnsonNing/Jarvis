@@ -98,12 +98,18 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--root", type=Path, required=True)
         sub.add_argument("--side", choices=["long", "short"], required=True)
         sub.add_argument("--ledger-root", type=Path)
+        sub.add_argument("--format", choices=["legacy", "new"], default="legacy")
+        sub.add_argument(
+            "--artifacts", type=Path, help="Explicit per-side new-baseline artifact directory"
+        )
         if op == "start":
             sub.add_argument("--max-steps", type=int)
             agent_options(sub)
     materialize = hermes.add_parser("materialize")
     materialize.add_argument("--root", type=Path, required=True)
     materialize.add_argument("--side", choices=["long", "short"], required=True)
+    materialize.add_argument("--format", choices=["legacy", "new"], default="legacy")
+    materialize.add_argument("--artifacts", type=Path)
     materialize.add_argument(
         "--python", type=Path, required=True, help="Trusted upstream Python environment"
     )
@@ -128,6 +134,7 @@ def run(args: argparse.Namespace) -> None:
             discovery,
             dream,
             exploration,
+            new_research,
             policy,
             pool,
             researcher,
@@ -141,6 +148,7 @@ def run(args: argparse.Namespace) -> None:
             agents,
             policy,
             researcher,
+            new_research,
             discovery,
             dream,
             exploration,
@@ -164,13 +172,31 @@ def run(args: argparse.Namespace) -> None:
     engine = CampaignEngine(store)
     if args.command == "hermes":
         if args.operation == "materialize":
+            if args.format == "new":
+                from jarvis.hermes_new import materialize_new
+
+                if args.artifacts is None:
+                    raise JarvisError("new-baseline materialization requires --artifacts")
+                emit(
+                    materialize_new(args.root, args.side, args.artifacts, args.python, args.output)
+                )
+                return
             from jarvis.materialize import materialize
 
             emit(materialize(args.root, args.side, args.python, args.output))
             return
         from jarvis.hermes import HermesAdapter
 
-        adapter = HermesAdapter(args.root, args.side, args.ledger_root)
+        if args.format == "new":
+            from jarvis.hermes_new import NewBaselineAdapter
+
+            if args.artifacts is None:
+                raise JarvisError("new-baseline admission requires --artifacts")
+            adapter: Any = NewBaselineAdapter(
+                args.root, args.side, args.artifacts, args.ledger_root
+            )
+        else:
+            adapter = HermesAdapter(args.root, args.side, args.ledger_root)
         if args.operation == "inspect":
             emit(adapter.inspect())
         else:

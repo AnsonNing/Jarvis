@@ -16,7 +16,7 @@ from jarvis.contracts import (
 )
 from jarvis.identity import digest
 from jarvis.policy import admit
-from jarvis.researcher import ResearchTurn, prompt_context, prompt_matches, verify_designed_action
+from jarvis.researcher import parse_turn, prompt_context, prompt_matches, verify_designed_action
 from jarvis.storage import Store
 
 
@@ -117,9 +117,7 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
                             or agent_id in used_agents
                         ):
                             raise IntegrityError("agent proposal unpaid, unknown or reused")
-                        turn = ResearchTurn.model_validate(
-                            store.artifacts.get(request["research_turn_ref"])
-                        )
+                        turn = parse_turn(store.artifacts.get(request["research_turn_ref"]))
                         verify_designed_action(turn, prior, request["agent_request_id"], action)
                         used_agents.add(agent_id)
                     elif action not in prior.available_actions:
@@ -145,7 +143,7 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
             ):
                 raise IntegrityError("agent receipt/usage settlement mismatch")
             if payload.get("turn_ref"):
-                turn = ResearchTurn.model_validate(store.artifacts.get(payload["turn_ref"]))
+                turn = parse_turn(store.artifacts.get(payload["turn_ref"]))
                 if digest(turn) != digest(receipt["answer"]):
                     raise IntegrityError("agent proposal differs from the observed provider answer")
                 accepted_agents[job_id] = payload["turn_ref"]
@@ -158,7 +156,7 @@ def verify(store: Store, campaign_id: str) -> dict[str, Any]:
                 or agent_id in used_agents
             ):
                 raise IntegrityError("terminal agent proposal unpaid, unknown or reused")
-            turn = ResearchTurn.model_validate(store.artifacts.get(payload["research_turn_ref"]))
+            turn = parse_turn(store.artifacts.get(payload["research_turn_ref"]))
             prior = ResearchState.model_validate(payload["state"])
             decision = PolicyDecision.model_validate(payload["decision"])
             admit(decision, prior)
