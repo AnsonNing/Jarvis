@@ -71,3 +71,19 @@ penalty. Owner-profile syntax/guard tests do not prove live fill/acknowledgement
 full costs, capacity, independent profitability, L2 capability learning or L3
 research-policy improvement. Current feature semantics and model inputs remain
 fixed; unsupported order-age or future/outcome signals are not synthesized.
+
+## C++ driver portability correction
+
+The first Linux CI run exposed a compiled-fixture defect: resolving a `clang++`
+symlink to `clang` changes the compiler driver's C++ standard-library linkage.
+The fixture now retains the selected driver's absolute path. Its executable
+bytes remain checksum-pinned through that path. Existing live runtime checkouts
+were preserved; the correction was developed and tested in a separate checkout.
+
+A regression test creates a driver symlink, builds a program using the C++
+standard library and executes the resulting binary. `pytest -q`: **165 passed in
+85.78s**. `ruff check src tests`, `ruff format --check src tests` (76 files),
+`mypy src/jarvis` (56 source modules) and `git diff --check` passed. These checks
+use the pinned dependencies and do not submit Iris work or repeat provider calls.
+Linux CI is a separate check after publication; the local result alone does not
+establish its outcome.

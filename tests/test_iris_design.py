@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -36,6 +37,26 @@ def rule(signal="spread_bps", op="le", value=3, combine="all"):
 @pytest.fixture
 def design_env(tmp_path):
     return design_environment(tmp_path / "inputs")
+
+
+def test_cpp_driver_symlink_still_links_and_runs_standard_library(tmp_path, monkeypatch):
+    compiler = shutil.which("clang++") or shutil.which("g++")
+    assert compiler is not None
+    alias = tmp_path / ("clang++" if "clang" in compiler else "g++")
+    alias.symlink_to(Path(compiler).resolve())
+    monkeypatch.setattr("jarvis.iris_design_fixture.shutil.which", lambda _: str(alias))
+    env = design_environment(tmp_path / "inputs")
+    profile = read_profile(env)
+    assert profile is not None
+    source, binary = tmp_path / "driver.cpp", tmp_path / "driver"
+    source.write_text('#include <iostream>\nint main(){std::cout << "C++ driver retained";}\n')
+    subprocess.run(
+        [profile.build.compiler, "-std=c++17", str(source), "-o", str(binary)],
+        check=True,
+        capture_output=True,
+    )
+    ran = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+    assert ran.stdout == "C++ driver retained"
 
 
 def test_closed_rules_reject_code_unknown_ops_and_nonfinite_values():

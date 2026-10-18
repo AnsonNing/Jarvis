@@ -22,7 +22,8 @@ Date: 2026-10-18. Release: 0.7.0. Synthetic Dream-RSI, Hermes baseline admission
 | P7 continuous Iris research | VERIFIED_WITH_LIMITATIONS | Rolling bounded programs under standing owner authorization, shared conservative quota, cross-program candidate deduplication, rejection feedback, original-server-time acknowledgement reads and one persistent admission watcher; thirteen artificial executions span five programs, with zero remote submissions |
 | P8 strategy-design rules | VERIFIED_WITH_LIMITATIONS | Typed all/any entry/cancel predicates, session clocks, quantity and position limits; owner-pinned source bindings and compile receipts; five compiled artificial executions across two adaptive epochs preserve positive/negative findings; quiescent predecessor handoff retains histories and shared quota |
 
-Validation: **164 tests passed in 81.59s**, Ruff lint/format passed for 76 Python
+Validation after the C++ driver portability correction: **165 tests passed in
+85.78s**, Ruff lint/format passed for 76 Python
 files and mypy passed for 56 source modules. Schema export, task CLI and complete local
 synthetic/Hermes workflows. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.

@@ -57,7 +57,10 @@ def design_environment(folder: Path) -> IrisEnvironment:
     compiler = shutil.which("clang++") or shutil.which("g++")
     if compiler is None:
         raise IntegrityError("C++17 compiler required for compiled design acceptance")
-    compiler = str(Path(compiler).resolve())
+    # The driver name selects C++ standard-library linkage. On Linux clang++
+    # commonly links to clang; resolving that symlink changes driver behavior.
+    # Hashing the retained path still pins the underlying executable bytes.
+    compiler = str(Path(compiler).absolute())
     template = folder / "toy.txt"
     template.write_text(
         "// protected artificial strategy\n// @start:config\n"
