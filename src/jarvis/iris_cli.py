@@ -13,12 +13,24 @@ from jarvis.storage import Store
 
 def add_commands(commands: Any) -> None:
     iris = commands.add_parser("iris").add_subparsers(dest="operation", required=True)
+    use = iris.add_parser("development-use")
+    use.add_argument("--upstream", type=Path, required=True)
+    use.add_argument("--owner-instruction", required=True)
+    use.add_argument("--output", type=Path, required=True)
+    ready = iris.add_parser("readiness")
+    ready.add_argument("--upstream", type=Path, required=True)
+    ready.add_argument("--python", type=Path, required=True)
+    ready.add_argument("--development-use", type=Path)
+    ready.add_argument("--design-root", type=Path)
+    ready.add_argument("--state", type=Path, action="append", default=[])
+    ready.add_argument("--output", type=Path)
     continuous = iris.add_parser("continuous-prepare")
     continuous.add_argument("--upstream", type=Path, required=True)
     continuous.add_argument("--python", type=Path, required=True)
     continuous.add_argument("--owner-instruction", required=True)
     continuous.add_argument("--output", type=Path, required=True)
     continuous.add_argument("--design-root", type=Path)
+    continuous.add_argument("--development-use", type=Path)
     iris.add_parser("continuous-start").add_argument("spec", type=Path)
     for operation in ["continuous-advance", "continuous-report", "continuous-quota"]:
         iris.add_parser(operation).add_argument("study_id")
@@ -45,6 +57,7 @@ def add_commands(commands: Any) -> None:
     prepare.add_argument("--window", choices=["full", "smoke"], default="full")
     prepare.add_argument("--python", type=Path, required=True)
     prepare.add_argument("--output", type=Path, required=True)
+    prepare.add_argument("--development-use", type=Path)
     iris.add_parser("queue-start").add_argument("spec", type=Path)
     enqueue = iris.add_parser("enqueue")
     enqueue.add_argument("queue_id")
@@ -94,6 +107,30 @@ def read(path: Path) -> Any:
     return yaml.safe_load(path.read_text())
 
 
+def preparation(args: argparse.Namespace) -> dict[str, Any]:
+    """Runs before Store/provider/queue construction; no job or remote operation."""
+    from jarvis.iris_admission import development_use, model_status
+    from jarvis.iris_readiness import research_readiness
+
+    if args.operation == "model-status":
+        return model_status(args.upstream)
+    if args.operation == "development-use":
+        value = development_use(args.upstream, args.owner_instruction).model_dump(mode="json")
+    else:
+        value = research_readiness(
+            args.upstream,
+            args.python,
+            design_root=args.design_root,
+            development_use_path=args.development_use,
+            states=tuple(args.state),
+        )
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with args.output.open("xb") as stream:
+            stream.write(canonical(value) + b"\n")
+    return value
+
+
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "research" and args.operation == "design-fixture":
         from jarvis.iris_design_fixture import run_design_fixture
@@ -137,7 +174,11 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
                 if args.output.exists():
                     raise JarvisError("choose a new private continuous study specification")
                 continuous_spec = prepare_continuous(
-                    args.upstream, args.python, args.owner_instruction, design_root=args.design_root
+                    args.upstream,
+                    args.python,
+                    args.owner_instruction,
+                    design_root=args.design_root,
+                    development_use_path=args.development_use,
                 )
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_bytes(canonical(continuous_spec) + b"\n")
@@ -172,9 +213,20 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             if args.output.exists():
                 raise JarvisError("choose a new private environment output")
             env = prepare_environment(
-                args.upstream, args.side, args.month, args.python, window=args.window
+                args.upstream,
+                args.side,
+                args.month,
+                args.python,
+                window=args.window,
+                development_use_path=args.development_use,
             )
-            baseline = prepare_baseline(args.upstream, args.side, args.month, window=args.window)
+            baseline = prepare_baseline(
+                args.upstream,
+                args.side,
+                args.month,
+                window=args.window,
+                development_use_path=args.development_use,
+            )
             baseline_file = args.output.with_name(args.output.stem + "-baseline.json")
             if baseline_file.exists():
                 raise JarvisError("choose a new baseline proof output")

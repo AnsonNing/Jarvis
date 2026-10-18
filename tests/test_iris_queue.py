@@ -1,10 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from jarvis.contracts import AdmissionError, IntegrityError, JarvisError
 from jarvis.identity import digest, file_digest
-from jarvis.iris import render_candidate
+from jarvis.iris import render_candidate, setting_capabilities
 from jarvis.iris_contracts import (
     IrisAuthorization,
     IrisEnvironment,
@@ -123,6 +124,23 @@ def test_region_only_candidate_and_capability_bounds(iris_environment):
     )
     with pytest.raises(AdmissionError, match="bounds"):
         render_candidate(env, IrisSettings(take_profit_bps=30))
+
+
+def test_closed_literal_product_uses_source_units_and_preserves_baseline(iris_environment):
+    path = Path(iris_environment.template)
+    path.write_text(
+        path.read_text().replace("toy_heuristic = 0.004", "toy_heuristic = 40 * 0.0001")
+    )
+    env = iris_environment.model_copy(update={"template_sha256": file_digest(path)})
+    assert setting_capabilities(env)[2]["baseline_value"] == 40
+    assert render_candidate(env, IrisSettings()) == path.read_text()
+    assert "toy_heuristic = 0.005" in render_candidate(env, IrisSettings(heuristic_cancel_bps=50))
+    for expression in ("40 * external_value", "40 * 0.0001 * 2", "function()", "40 + 1"):
+        path.write_text(path.read_text().replace("40 * 0.0001", expression))
+        changed = env.model_copy(update={"template_sha256": file_digest(path)})
+        with pytest.raises(AdmissionError):
+            render_candidate(changed, IrisSettings(heuristic_cancel_bps=50))
+        path.write_text(path.read_text().replace(expression, "40 * 0.0001"))
 
 
 @pytest.mark.parametrize("fault", ["after_reserve", "after_start", "after_receipt"])

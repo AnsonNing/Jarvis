@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-18. Release: 0.7.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, standing-authorized continuous Iris research and closed strategy-design interventions are available.
+Date: 2026-10-18. Release: 0.8.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, standing-authorized continuous Iris research, closed strategy-design interventions and execution-free preparation are available.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -21,10 +21,11 @@ Date: 2026-10-18. Release: 0.7.0. Synthetic Dream-RSI, Hermes baseline admission
 | P6 direction program / Hermes Dream | VERIFIED_WITH_LIMITATIONS | Concurrent next-epoch direction role, immutable catalogs, causal prior evidence, exact replay, development finalist, one-shot heldout, fresh arms and measured canary rollback pass artificial acceptance; real policy promotion remains gated |
 | P7 continuous Iris research | VERIFIED_WITH_LIMITATIONS | Rolling bounded programs under standing owner authorization, shared conservative quota, cross-program candidate deduplication, rejection feedback, original-server-time acknowledgement reads and one persistent admission watcher; thirteen artificial executions span five programs, with zero remote submissions |
 | P8 strategy-design rules | VERIFIED_WITH_LIMITATIONS | Typed all/any entry/cancel predicates, session clocks, quantity and position limits; owner-pinned source bindings and compile receipts; five compiled artificial executions across two adaptive epochs preserve positive/negative findings; quiescent predecessor handoff retains histories and shared quota |
+| P9 research readiness | VERIFIED_WITH_LIMITATIONS | Explicit logical-case replacement proof, retained unknown requests, completed-findings attention state, owner-bound development-use records and store-free readiness; stopped unstarted watchers remain stopped; four supplied baseline ledgers recomputed and four source compilations passed locally, with no new research/LLM/backend submission |
 
-Validation after the C++ driver portability correction: **165 tests passed in
-85.78s**, Ruff lint/format passed for 76 Python
-files and mypy passed for 56 source modules. Schema export, task CLI and complete local
+Validation after research preparation changes: **194 tests passed in
+85.40s**, Ruff lint/format passed for 80 Python
+files and mypy passed for 58 source modules. Schema export, task CLI and complete local
 synthetic/Hermes workflows. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.

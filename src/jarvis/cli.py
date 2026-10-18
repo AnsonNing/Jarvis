@@ -140,6 +140,15 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.command == "iris" and args.operation in {
+        "model-status",
+        "development-use",
+        "readiness",
+    }:
+        from jarvis.iris_cli import preparation
+
+        emit(preparation(args))
+        return
     if args.command == "task":
         task = load_task(args.path)
         emit({"status": "VALID", "task_identity": task.identity, "domain": task.domain})
@@ -155,6 +164,8 @@ def run(args: argparse.Namespace) -> None:
             hermes_dream,
             hermes_policy,
             hermes_study,
+            iris_admission,
+            iris_cases,
             iris_continuous,
             iris_contracts,
             iris_design,
@@ -183,6 +194,8 @@ def run(args: argparse.Namespace) -> None:
             hermes_study,
             hermes_dream,
             hermes_policy,
+            iris_admission,
+            iris_cases,
             iris_contracts,
             iris_design,
             iris_continuous,

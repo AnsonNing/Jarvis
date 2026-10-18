@@ -1,6 +1,7 @@
 """Allowlisted region-only candidate construction and private Iris transport."""
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -39,7 +40,20 @@ def scalar_pattern(binding: IrisBinding) -> str:
     if binding.syntax == "macro_bool":
         return rf"(#define\s+{symbol}\s+\()\s*(true|false)\s*(\))"
     kind = "uint32_t" if binding.syntax == "clock" else binding.syntax
-    return rf"(\bconstexpr\s+{kind}\s+{symbol}\s*=\s*)([-+0-9.eE']+)(\s*;)"
+    number = r"[-+]?(?:[0-9][0-9']*(?:\.[0-9']*)?|\.[0-9']+)(?:[eE][-+]?[0-9]+)?"
+    # Closed literal or two-literal product, never a general C++ expression.
+    value = rf"{number}(?:[ \t]*\*[ \t]*{number})?"
+    return rf"(\bconstexpr\s+{kind}\s+{symbol}\s*=\s*)({value})(\s*;)"
+
+
+def scalar_number(value: str) -> float:
+    parts = value.split("*")
+    if len(parts) > 2:
+        raise AdmissionError("unsupported scalar source expression")
+    number = math.prod(float(part.replace("'", "")) for part in parts)
+    if not math.isfinite(number):
+        raise AdmissionError("nonfinite source constant")
+    return number
 
 
 def split_regions(text: str) -> list[tuple[bool, str]]:
@@ -110,7 +124,7 @@ def render_candidate(env: IrisEnvironment, settings: IrisSettings) -> str:
                         raise AdmissionError("numeric binding does not accept bool")
                     number = float(value) * binding.scale
                     if binding.mode == "delta":
-                        number += float(match[2].replace("'", ""))
+                        number += scalar_number(match[2])
                     if (binding.minimum is not None and number < binding.minimum) or (
                         binding.maximum is not None and number > binding.maximum
                     ):
@@ -163,6 +177,16 @@ def verify_environment(env: IrisEnvironment) -> None:
     for name, expected_hash in expected.items():
         if file_digest(Path(name)) != expected_hash:
             raise IntegrityError("Iris protected input changed")
+        if Path(name).suffix == ".json":
+            try:
+                record = json.loads(Path(name).read_bytes())
+            except ValueError:
+                continue
+            if isinstance(record, dict) and record.get("kind") == "IrisDevelopmentUse":
+                if env.period.exposure != "development_exposed":
+                    raise IntegrityError(
+                        "owner development use cannot supply independent test evidence"
+                    )
     read_profile(env)
 
 
@@ -183,9 +207,7 @@ def setting_capabilities(env: IrisEnvironment, *, text: str | None = None) -> li
             value: Any = matches[0] == "true" if len(matches) == 1 else None
         else:
             matches = list(re.finditer(scalar_pattern(binding), region))
-            value = (
-                float(matches[0][2].replace("'", "")) / binding.scale if len(matches) == 1 else None
-            )
+            value = scalar_number(matches[0][2]) / binding.scale if len(matches) == 1 else None
             if binding.syntax == "clock" and value is not None:
                 value = clock_to_ms(int(value))
         output.append(

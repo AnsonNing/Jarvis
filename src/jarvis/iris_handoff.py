@@ -30,6 +30,7 @@ def predecessor_status(
             "NEEDS_RECONCILIATION",
             "TRACK_NEEDS_ATTENTION",
             "MODEL_ACCEPTANCE_FAILED",
+            "MODEL_ACCEPTANCE_NEEDS_ATTENTION",
             "PAUSED",
             "CANCELLED",
         }:

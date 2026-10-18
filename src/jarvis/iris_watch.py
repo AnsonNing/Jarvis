@@ -69,6 +69,18 @@ def watch_research(
             raise IntegrityError(
                 "watcher scope or owner instruction changed; preserve the existing study"
             )
+        # Owner stop and unresolved outcomes are durable even before a study ID exists.
+        if state["status"] in {
+            "CANCELLED",
+            "PAUSED",
+            "CLOSED",
+            "NEEDS_RECONCILIATION",
+            "TRACK_NEEDS_ATTENTION",
+            "PREDECESSOR_NEEDS_ATTENTION",
+            "MODEL_ACCEPTANCE_FAILED",
+            "MODEL_ACCEPTANCE_NEEDS_ATTENTION",
+        }:
+            return state
         if state.get("study_id") and store.status(state["study_id"]) in {
             "CLOSED",
             "NEEDS_RECONCILIATION",
@@ -121,8 +133,11 @@ def watch_research(
                     source_identity=source_identity(),
                     elapsed_seconds=time.monotonic() - started,
                 )
-                if admission["status"] == "MODEL_ACCEPTANCE_FAILED":
-                    state["status"] = "MODEL_ACCEPTANCE_FAILED"
+                if admission["status"] in {
+                    "MODEL_ACCEPTANCE_FAILED",
+                    "MODEL_ACCEPTANCE_NEEDS_ATTENTION",
+                }:
+                    state["status"] = admission["status"]
                     write_state(state_path, state)
                     return state
                 if admission["status"] != "READY":

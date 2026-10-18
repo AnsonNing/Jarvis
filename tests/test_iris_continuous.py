@@ -272,3 +272,52 @@ def test_model_watcher_admits_then_resumes_completed_work_without_external_calls
     monkeypatch.setattr(backend, "quota", lambda *_: pytest.fail("closed watcher read quota"))
     monkeypatch.setattr(provider, "complete", lambda *_: pytest.fail("closed watcher called LLM"))
     assert watch_research(*args, engine=engine, max_steps=2) == state
+
+
+@pytest.mark.parametrize("stop", ["CANCELLED", "PAUSED", "MODEL_ACCEPTANCE_NEEDS_ATTENTION"])
+def test_stopped_unstarted_watcher_never_restarts_or_reads_admission(
+    tmp_path, iris_environment, monkeypatch, stop
+):
+    from jarvis.iris_watch import watch_research
+
+    store, engine, owner, backend, provider = create_study(tmp_path / "store", iris_environment)
+    path = tmp_path / "state.json"
+    monkeypatch.setattr(
+        "jarvis.iris_watch.model_status", lambda _: {"status": "WAITING_FOR_MODEL_ACCEPTANCE"}
+    )
+    monkeypatch.setattr("jarvis.iris_watch.time.sleep", lambda _: None)
+    args = (store, tmp_path, tmp_path / "python", "owner scope", path)
+    watch_research(*args, engine=engine, max_steps=1)
+    state = json.loads(path.read_text())
+    state["status"] = stop
+    path.write_text(json.dumps(state))
+    monkeypatch.setattr(
+        "jarvis.iris_watch.model_status", lambda _: pytest.fail("stopped watcher checked admission")
+    )
+    assert watch_research(*args, engine=engine, max_steps=1) == state
+    assert not backend.submissions and provider.calls == 0
+
+
+def test_completed_package_findings_return_attention_without_polling(
+    tmp_path, iris_environment, monkeypatch
+):
+    from jarvis.iris_watch import watch_research
+
+    store, engine, owner, backend, provider = create_study(tmp_path / "store", iris_environment)
+    monkeypatch.setattr(
+        "jarvis.iris_watch.model_status", lambda _: {"status": "MODEL_ACCEPTANCE_NEEDS_ATTENTION"}
+    )
+    monkeypatch.setattr(
+        "jarvis.iris_watch.time.sleep", lambda _: pytest.fail("attention state kept polling")
+    )
+    result = watch_research(
+        store,
+        tmp_path,
+        tmp_path / "python",
+        "owner scope",
+        tmp_path / "state.json",
+        engine=engine,
+        max_steps=3,
+    )
+    assert result["status"] == "MODEL_ACCEPTANCE_NEEDS_ATTENTION"
+    assert "study_id" not in result and not backend.submissions and provider.calls == 0

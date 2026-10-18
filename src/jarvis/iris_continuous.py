@@ -497,7 +497,12 @@ def continuous_report(store: Store, owner: str) -> dict[str, Any]:
 
 
 def prepare_continuous(
-    upstream: Path, python: Path, owner_instruction: str, *, design_root: Path | None = None
+    upstream: Path,
+    python: Path,
+    owner_instruction: str,
+    *,
+    design_root: Path | None = None,
+    development_use_path: Path | None = None,
 ) -> IrisContinuousSpec:
     from jarvis.iris_admission import attach_design, prepare_baseline, prepare_environment
 
@@ -507,14 +512,27 @@ def prepare_continuous(
     for side in sides:
         queues = []
         for window in windows:
-            environment = prepare_environment(upstream, side, "08", python, window=window)
+            environment = prepare_environment(
+                upstream,
+                side,
+                "08",
+                python,
+                window=window,
+                development_use_path=development_use_path,
+            )
             if design_root:
                 environment = attach_design(environment, design_root / (side + ".json"))
             queues.append(
                 IrisQueueSpec(
                     goal="最大化 entry-only PL，完整記錄風險、機制、反證、負面結果與改善",
                     environment=environment,
-                    baseline=prepare_baseline(upstream, side, "08", window=window),
+                    baseline=prepare_baseline(
+                        upstream,
+                        side,
+                        "08",
+                        window=window,
+                        development_use_path=development_use_path,
+                    ),
                 )
             )
         tracks.append(IrisResearchTrack(label=side, smoke=queues[0], development=queues[1]))

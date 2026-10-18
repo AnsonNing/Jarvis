@@ -4,9 +4,12 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from jarvis.contracts import AdmissionError, IntegrityError
+from pydantic import Field
+
+from jarvis.contracts import AdmissionError, IntegrityError, Record
 from jarvis.identity import digest, file_digest
 from jarvis.iris import render_candidate, verify_environment
+from jarvis.iris_cases import read_object, select_cases, selected_case
 from jarvis.iris_contracts import (
     IrisBaselineProof,
     IrisBinding,
@@ -15,6 +18,98 @@ from jarvis.iris_contracts import (
     IrisSettings,
 )
 from jarvis.iris_design import IrisDesignProfile, design_capabilities
+
+
+class IrisDevelopmentUse(Record):
+    """Owner-bound preparation decision, never a submission or scientific PASS."""
+
+    kind: Literal["IrisDevelopmentUse"] = "IrisDevelopmentUse"
+    owner_instruction: str = Field(min_length=1, max_length=6000)
+    scope: Literal["development_exposed"] = "development_exposed"
+    execution_authorized: Literal[False] = False
+    independent_validation: Literal[False] = False
+    evidence: dict[str, str] = Field(min_length=1)
+    attention_codes: tuple[Literal["analysis_findings", "final_findings"], ...] = ()
+    known_limits: tuple[str, ...] = ()
+
+
+def development_inputs(folder: Path) -> dict[str, str]:
+    """Pin supplied source/model/evaluator identities without importing strategy code."""
+    folder = folder.resolve()
+    paths = [
+        folder / name
+        for name in (
+            "workflow_state.json",
+            "manifest.json",
+            "protocol.json",
+            "analysis.json",
+            "final_acceptance.json",
+            "history_monthly_acceptance.json",
+            "training_quality_acceptance.json",
+            "local_acceptance.json",
+            "calendar_08.json",
+            "calendar_09.json",
+        )
+    ]
+    for side in ("long", "short"):
+        paths.extend(
+            folder / side / name
+            for name in (
+                "training_acceptance.json",
+                "hpp_verification.json",
+                "model_metadata.json",
+            )
+        )
+        proof = read_object(folder / side / "hpp_verification.json")
+        for model in proof.get("models", []):
+            path = Path(model["hpp_file"])
+            if file_digest(path) != "sha256:" + model["hpp_sha256"]:
+                raise IntegrityError("HPP bytes differ from verification")
+            paths.append(path)
+    paths.extend(folder.parents[1] / name for name in ("iris_agent.py", "iris_entry_evaluation.py"))
+    result = {str(p.resolve()): file_digest(p) for p in paths}
+    manifest = read_object(folder / "manifest.json")
+    result.update(select_cases(folder, manifest)["proof_inputs"])
+    for case in select_cases(folder, manifest)["cases"]:
+        source = Path(case["file"])
+        if file_digest(source) != "sha256:" + case["sha256"]:
+            raise IntegrityError("owner candidate source changed")
+        result[str(source.resolve())] = file_digest(source)
+    return result
+
+
+def development_use(folder: Path, owner_instruction: str) -> IrisDevelopmentUse:
+    status = model_status(folder)
+    codes = set(status.get("attention_codes", []))
+    if status["status"] not in {"READY", "MODEL_ACCEPTANCE_NEEDS_ATTENTION"} or not codes <= {
+        "analysis_findings",
+        "final_findings",
+    }:
+        raise AdmissionError("engineering/source/lineage gates must pass before development use")
+    # An arbitrary non-PASS analysis is not a supported research finding.
+    for name in ("analysis.json", "final_acceptance.json"):
+        if read_object(folder / name).get("status") not in {"PASS", "COMPLETED_WITH_FINDINGS"}:
+            raise AdmissionError("unsupported upstream finding status")
+    final = read_object(folder / "final_acceptance.json")
+    return IrisDevelopmentUse(
+        owner_instruction=owner_instruction,
+        evidence=development_inputs(folder),
+        attention_codes=tuple(sorted(codes)),
+        known_limits=tuple(final.get("limits", [])),
+    )
+
+
+def require_admission(folder: Path, use_path: Path | None) -> dict[str, str]:
+    if use_path is None:
+        status = model_status(folder)
+        if status["status"] != "READY":
+            raise AdmissionError(status["status"] + ": " + "; ".join(status["reasons"]))
+        return {}
+    supplied = IrisDevelopmentUse.model_validate(read_object(use_path))
+    current = development_use(folder, supplied.owner_instruction)
+    if supplied != current:
+        raise IntegrityError("development-use evidence, source or findings changed")
+    return {**supplied.evidence, str(use_path.resolve()): file_digest(use_path)}
 
 
 def attach_design(env: IrisEnvironment, profile_path: Path) -> IrisEnvironment:
@@ -54,21 +149,27 @@ def model_status(folder: Path) -> dict[str, Any]:
         "local_acceptance.json",
         "analysis.json",
     ]
-    reasons = []
+    reasons: list[str] = []
+    codes: list[str] = []
     loaded: dict[str, Any] = {}
     for name in required:
-        if not (folder / name).is_file():
-            reasons.append("missing " + name)
-        else:
-            try:
-                loaded[name] = json.loads((folder / name).read_text())
-            except (OSError, ValueError):
-                reasons.append("incomplete or unreadable " + name)
+        try:
+            loaded[name] = read_object(folder / name)
+        except IntegrityError as exc:
+            reasons.append(str(exc))
+            codes.append("missing_evidence")
     stage = loaded.get("workflow_state.json", {}).get("stage")
     manifest = loaded.get("manifest.json", {})
+    cases = manifest.get("cases", [])
+    if not isinstance(cases, list):
+        cases = []
     progress = {
         "upstream_stage": stage,
-        "completed_cases": sum(c.get("status") == "completed" for c in manifest.get("cases", [])),
+        "completed_cases": sum(
+            isinstance(c, dict) and c.get("status") == "completed" for c in cases
+        ),
+        "physical_requests": len(cases),
+        "unresolved_superseded": [],
     }
     failed = stage == "needs_attention" or any(
         v.get("status") in {"FAIL", "FAILED", "REJECTED"} for v in loaded.values()
@@ -80,32 +181,74 @@ def model_status(folder: Path) -> dict[str, Any]:
             **progress,
         }
     if reasons:
-        return {"status": "WAITING_FOR_MODEL_ACCEPTANCE", "reasons": reasons, **progress}
-    if loaded["workflow_state.json"].get("stage") != "complete":
+        return {
+            "status": "MODEL_ACCEPTANCE_NEEDS_ATTENTION"
+            if stage == "complete"
+            else "WAITING_FOR_MODEL_ACCEPTANCE",
+            "reasons": reasons,
+            "attention_codes": codes,
+            **progress,
+        }
+    if stage != "complete":
         reasons.append("upstream workflow has not completed")
+        codes.append("workflow_incomplete")
     for name in required[2:]:
         if loaded[name].get("status") != "PASS":
             reasons.append("acceptance not PASS: " + name)
-    manifest = loaded["manifest.json"]
+            codes.append(
+                "analysis_findings" if name == "analysis.json" else "engineering_incomplete"
+            )
+    final_path = folder / "final_acceptance.json"
+    if final_path.exists():
+        try:
+            final = read_object(final_path)
+            if final.get("status") in {"FAIL", "FAILED", "REJECTED"}:
+                return {
+                    "status": "MODEL_ACCEPTANCE_FAILED",
+                    "reasons": ["final acceptance failed"],
+                    **progress,
+                }
+            if final.get("status") != "PASS":
+                reasons.append("acceptance not PASS: final_acceptance.json")
+                codes.append("final_findings")
+        except IntegrityError as exc:
+            reasons.append(str(exc))
+            codes.append("missing_evidence")
     if not manifest.get("training_accepted") or not manifest.get("model_smokes_accepted"):
         reasons.append("training or model smoke gate incomplete")
-    if any(c["status"] != "completed" for c in manifest["cases"]):
-        reasons.append("unfinished upstream backtest cases")
+        codes.append("engineering_incomplete")
+    try:
+        selection = select_cases(folder, manifest)
+        progress["effective_cases"] = len(selection["cases"])
+        progress["unresolved_superseded"] = selection["unresolved_superseded"]
+        if any(c.get("status") != "completed" for c in selection["cases"]):
+            reasons.append("unfinished effective upstream backtest cases")
+            codes.append("unfinished_cases")
+    except IntegrityError as exc:
+        reasons.append(str(exc))
+        codes.append("invalid_case_lineage")
     for side in ["long", "short"]:
         for name in ["training_acceptance.json", "hpp_verification.json", "model_metadata.json"]:
             path = folder / side / name
-            if not path.is_file():
-                reasons.append(side + " missing " + name)
-            elif (
-                name != "model_metadata.json"
-                and json.loads(path.read_text()).get("status") != "PASS"
-            ):
-                reasons.append(side + " not accepted: " + name)
+            try:
+                value = read_object(path)
+                if name != "model_metadata.json" and value.get("status") != "PASS":
+                    reasons.append(side + " not accepted: " + name)
+                    codes.append("engineering_incomplete")
+            except IntegrityError as exc:
+                reasons.append(side + ": " + str(exc))
+                codes.append("missing_evidence")
     return {
-        "status": "READY" if not reasons else "WAITING_FOR_MODEL_ACCEPTANCE",
+        "status": "READY"
+        if not reasons
+        else (
+            "MODEL_ACCEPTANCE_NEEDS_ATTENTION"
+            if stage == "complete"
+            else "WAITING_FOR_MODEL_ACCEPTANCE"
+        ),
         "reasons": reasons,
-        "upstream_stage": loaded["workflow_state.json"].get("stage"),
-        "completed_cases": sum(c["status"] == "completed" for c in manifest["cases"]),
+        "attention_codes": sorted(set(codes)),
+        **progress,
         "source": "owner-supplied corrected multi-month OOF/residual workflow; read-only inspection",
     }
 
@@ -117,11 +260,10 @@ def prepare_environment(
     python: Path,
     *,
     window: Literal["full", "smoke"] = "full",
+    development_use_path: Path | None = None,
 ) -> IrisEnvironment:
     folder = folder.resolve()
-    status = model_status(folder)
-    if status["status"] != "READY":
-        raise AdmissionError("WAITING_FOR_MODEL_ACCEPTANCE: " + "; ".join(status["reasons"]))
+    development_pins = require_admission(folder, development_use_path)
     root = folder.parents[1]
     manifest = json.loads((folder / "manifest.json").read_text())
     label = (
@@ -129,7 +271,7 @@ def prepare_environment(
         if window == "smoke"
         else f"multimonth_{side}_trading_cancel_{month}"
     )
-    case = next(c for c in manifest["cases"] if c["label"] == label)
+    case = selected_case(folder, label)
     if window == "smoke" and month != "08":
         raise AdmissionError("accepted smoke calendar belongs to month 08")
     template = Path(case["file"])
@@ -151,6 +293,12 @@ def prepare_environment(
             "analysis.json",
         ]
     }
+    pinned.update(select_cases(folder, manifest)["proof_inputs"])
+    pinned.update(development_pins)
+    if (folder / "final_acceptance.json").exists():
+        pinned[str(folder / "final_acceptance.json")] = file_digest(
+            folder / "final_acceptance.json"
+        )
     for direction in ["long", "short"]:
         for name in ["model_metadata.json", "training_acceptance.json", "hpp_verification.json"]:
             path = folder / direction / name
@@ -283,17 +431,21 @@ def prepare_environment(
 
 
 def prepare_baseline(
-    folder: Path, side: str, month: str, *, window: Literal["full", "smoke"] = "full"
+    folder: Path,
+    side: str,
+    month: str,
+    *,
+    window: Literal["full", "smoke"] = "full",
+    development_use_path: Path | None = None,
 ) -> IrisBaselineProof:
-    if model_status(folder)["status"] != "READY":
-        raise AdmissionError("multi-month model package is not fully accepted")
+    require_admission(folder, development_use_path)
     manifest = folder / "manifest.json"
     label = (
         f"multimonth_{side}_smoke"
         if window == "smoke"
         else f"multimonth_{side}_trading_cancel_{month}"
     )
-    case = next(c for c in json.loads(manifest.read_text())["cases"] if c["label"] == label)
+    case = selected_case(folder, label)
     candidates = [
         p
         for p in Path(case["result_dir"]).glob("*.csv")
@@ -303,7 +455,7 @@ def prepare_baseline(
         raise IntegrityError("baseline requires one native entry/snapshot ledger")
     return IrisBaselineProof(
         manifest=str(manifest),
-        label=label,
+        label=case["label"],
         raw=str(candidates[0]),
         raw_sha256=file_digest(candidates[0]),
     )
