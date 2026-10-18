@@ -119,6 +119,20 @@ def parser() -> argparse.ArgumentParser:
         required=True,
         help="New private output folder outside the source repository",
     )
+    study = hermes.add_parser("study")
+    for name in ("root", "artifacts", "ledger-root"):
+        study.add_argument("--" + name, type=Path, required=True)
+    study.add_argument("--side", choices=["long", "short"], required=True)
+    study.add_argument("--rounds", type=int, default=2)
+    agent_options(study)
+    for op in ("study-resume", "study-verify", "study-report"):
+        sub = hermes.add_parser(op)
+        sub.add_argument("study_id")
+    exit_parser = hermes.add_parser("exit-replay")
+    exit_parser.add_argument("--input", type=Path, required=True)
+    exit_parser.add_argument("--settings", type=Path, required=True)
+    for op in ("exit-resume", "exit-verify"):
+        hermes.add_parser(op).add_argument("job_id")
     return p
 
 
@@ -133,7 +147,9 @@ def run(args: argparse.Namespace) -> None:
             contracts,
             discovery,
             dream,
+            exit_replay,
             exploration,
+            hermes_study,
             new_research,
             policy,
             pool,
@@ -152,6 +168,8 @@ def run(args: argparse.Namespace) -> None:
             discovery,
             dream,
             exploration,
+            exit_replay,
+            hermes_study,
             pool,
             search_space,
             suite,
@@ -171,6 +189,69 @@ def run(args: argparse.Namespace) -> None:
     store = Store(args.store)
     engine = CampaignEngine(store)
     if args.command == "hermes":
+        if args.operation.startswith("study"):
+            from jarvis.hermes_study import HermesStudy, HermesStudySpec, verify_hermes_study
+            from jarvis.researcher import AgentConfig
+
+            study = HermesStudy(store)
+            if args.operation == "study":
+                if args.agent != "codex":
+                    raise JarvisError("real Hermes study requires explicit --agent codex")
+                sid = study.create(
+                    HermesStudySpec(
+                        root=str(args.root.resolve()),
+                        side=args.side,
+                        artifacts=str(args.artifacts.resolve()),
+                        ledger_root=str(args.ledger_root.resolve()),
+                        rounds=args.rounds,
+                        objective=args.goal,
+                        tokens_per_round=args.llm_token_budget,
+                        agent=AgentConfig(
+                            executable=args.codex_executable,
+                            model=args.model,
+                            timeout_seconds=args.llm_timeout,
+                            max_calls=args.max_llm_calls,
+                        ),
+                    )
+                )
+                print(f"Hermes study created: {sid}", file=sys.stderr, flush=True)
+                ref = study.run(sid)
+                emit({**store.artifacts.get(ref), "report_ref": ref})
+            elif args.operation == "study-resume":
+                ref = study.run(args.study_id)
+                emit({**store.artifacts.get(ref), "report_ref": ref})
+            elif args.operation == "study-verify":
+                emit(verify_hermes_study(store, args.study_id))
+            else:
+                checked = verify_hermes_study(store, args.study_id)
+                emit(
+                    {
+                        **store.artifacts.get(checked["report_ref"]),
+                        "report_ref": checked["report_ref"],
+                    }
+                )
+            return
+        if args.operation.startswith("exit-"):
+            from jarvis.exit_replay import create_exit_job, run_exit_job, verify_exit_job
+
+            jid = (
+                create_exit_job(store, args.input, args.settings)
+                if args.operation == "exit-replay"
+                else args.job_id
+            )
+            if args.operation == "exit-verify":
+                emit(verify_exit_job(store, jid))
+            else:
+                print(f"Exit replay created/resumed: {jid}", file=sys.stderr, flush=True)
+                ref = run_exit_job(store, jid)
+                emit(
+                    {
+                        "job_id": jid,
+                        "result": store.artifacts.get(ref),
+                        "verification": verify_exit_job(store, jid),
+                    }
+                )
+            return
         if args.operation == "materialize":
             if args.format == "new":
                 from jarvis.hermes_new import materialize_new

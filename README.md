@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.3 adds a complete synthetic Dream-RSI study: branching histories, restricted policy proposals, independent validation, fresh paired campaigns, policy versions and rollback. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.4 adds an explicit new Hermes frozen-baseline adapter, causal multi-round evidence reuse, controlled prefill cancellation rules and a quote-based exit simulation contract. The synthetic Dream-RSI study includes branching histories, restricted policy proposals, independent validation, fresh paired campaigns, policy versions and rollback. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Dream-RSI supports an isolated L3 synthetic proof; generated-code execution, L2 capability learning and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -53,6 +53,43 @@ strategy validation reports NOT_RUN. See the
 [integration receipt](docs/implementation/HERMES-local-integration.md).
 
 ## Run the real LLM researcher
+
+For the new `cotrain_controls_v1` frozen baseline, explicitly select its artifacts.
+After materialization, two or three bounded development rounds can share earlier
+verified comparisons. Each later campaign must reproduce the baseline and execute
+`prior_round_review` before proposing new comparisons. Reviews carry sealed report
+and receipt references; the study verifier rebuilds their causal lineage offline.
+
+```sh
+jarvis hermes materialize --format new --root "$HERMES_ROOT" --side long \
+  --artifacts "$NEW_LONG_ARTIFACTS" --python "$HERMES_PYTHON" \
+  --output .jarvis/new-baseline/long
+jarvis hermes study --root "$HERMES_ROOT" --side long \
+  --artifacts "$NEW_LONG_ARTIFACTS" --ledger-root .jarvis/new-baseline/long \
+  --agent codex --rounds 2 --max-llm-calls 8 --llm-token-budget 250000
+jarvis hermes study-resume <study-id>
+jarvis hermes study-verify <study-id>
+jarvis hermes study-report <study-id>
+```
+
+The new adapter supports cancellation risk deltas, minimum prefill order age and
+bounded all/any rules over model risk and order age, with one contribution per
+episode. These comparisons assume immediate successful cancellation on the
+historically filled population. Price-based rules and acknowledgement races need
+additional data. Stop/target simulation accepts a separate typed quote/fill
+contract and records hypothetical execution under explicit latency/slippage/fee
+assumptions; it cannot derive a price path from saved PL or exit prices.
+
+```sh
+jarvis hermes exit-replay --input "$EXIT_INPUT_JSON" --settings "$EXIT_SETTINGS_JSON"
+jarvis hermes exit-resume <job-id>
+jarvis hermes exit-verify <job-id>
+jarvis schema .jarvis/schemas
+```
+
+See [execution data contract](docs/adapters/exit-and-cancel-data.md) for required
+fields and [new-baseline admission](docs/implementation/P5-new-baseline-admission.md)
+for the verified fidelity checks.
 
 Use the locally installed Codex CLI with its existing login. Keep executable paths,
 credentials and run outputs private. The default model is selected by the installed

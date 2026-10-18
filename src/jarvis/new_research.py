@@ -81,11 +81,13 @@ INSTRUCTIONS_V2 = (
 The required answer kind is ResearchTurnV2. Use hermes_new tools only when admitted.
 Inspection and the reproduced frozen baseline are mandatory. If prior_round_review is offered,
 read it before new experiments. Its prior development findings are advisory, not independent tests.
+Source report/receipt hashes inside a review are provenance only. Cite the current visible evidence IDs.
 threshold_experiment changes trading_cutoff_delta in [-0.002,0.002] OR cancel_mode='disabled'.
 cancel_experiment changes exactly ONE of: cancel_risk_delta [-0.2,0.2] in model-risk units;
 min_order_age_ms (0,30000], requiring baseline risk crossing AND that minimum prefill age;
 or cancel_rule with bounded all/any score/age conditions and gt/ge/lt/le comparisons.
 Use small evidence-grounded changes appropriate to the observed risk scale, not percentile refits.
+Risk output can be negative predicted PR for regressors, not necessarily a probability. Follow inspection's model target/units.
 joint_experiment permits two or three explicitly controlled changes after single-factor evidence.
 Do not combine disabled cancellation with a trigger, or custom rules with implicit age/risk changes.
 Rules can read only cancel_score and order_age_ms. No spread, adverse move or postfill price path is

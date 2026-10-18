@@ -223,6 +223,8 @@ class NewBaselineAdapter(HermesAdapter):
             "feature_slots": 91,
             "selected_policy": self.metadata["selected_policy"],
             "fixed_thresholds": self.original["cutoffs"],
+            "model_target_description": self.original.get("target", "not supplied"),
+            "risk_units": "Frozen loader's risk output; classifiers use probability, regressors use negative predicted PR. Do not assume probability bounds.",
             "split_dates": {
                 k: self.original["config"][k]
                 for k in [
@@ -353,6 +355,21 @@ class NewBaselineAdapter(HermesAdapter):
             or not np.isfinite(events[list(required - {"episode_id"})]).all().all()
         ):
             raise IntegrityError("invalid snapshot ledger")
+        clock = events.fs1
+        seconds = (
+            (clock // 10000000) * 3600 + ((clock // 100000) % 100) * 60 + (clock % 100000) / 1000
+        )
+        if (
+            not np.array_equal(events.fs0, events.fs0.astype(int))
+            or (events.fs0 < 0).any()
+            or not np.array_equal(clock, clock.astype(int))
+            or (clock < 0).any()
+            or (clock // 10000000 >= 24).any()
+            or ((clock // 100000) % 100 >= 60).any()
+            or ((clock // 1000) % 100 >= 60).any()
+            or not np.allclose(seconds, events.event_seconds, rtol=0, atol=1e-8)
+        ):
+            raise IntegrityError("invalid snapshot index or clock")
         joined = events.merge(
             frame[["episode_id", "row_id", "place_seconds", "fill_seconds"]],
             on="episode_id",

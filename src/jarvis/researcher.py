@@ -134,6 +134,18 @@ def admit_turn(
         from jarvis.new_research import validate_new_parameters
 
         validate_new_parameters(template.action_id, arguments)
+        if template.action_id.endswith("experiment"):
+            for observation in state.observations:
+                if observation.action_id != "prior_round_review":
+                    continue
+                for finding in observation.findings:
+                    review = json.loads(finding)
+                    if any(
+                        c["parameters"] == arguments
+                        for prior in review["prior_development_results"]
+                        for c in prior["comparisons"]
+                    ):
+                        raise AdmissionError("DUPLICATE_PRIOR_ROUND_EXPERIMENT")
     else:
         validate_parameters(template.action_id, arguments)
     hypothesis = turn.hypothesis.model_copy(

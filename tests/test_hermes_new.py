@@ -266,6 +266,21 @@ def test_prefill_conditions_first_crossing_and_missing_fields(new_baseline, tmp_
         )
 
 
+def test_event_clock_is_independent_and_regression_risk_can_be_negative(new_baseline):
+    root, out, ledger = new_baseline
+    adapter = NewBaselineAdapter(root, "long", out, ledger)
+    frame = pd.read_parquet(ledger / "orders.parquet")
+    events = pd.read_parquet(ledger / "events.parquet")
+    frame.loc[0, "c_max_risk"] = -0.1
+    events.loc[0, "c_risk"] = -0.1
+    events.to_parquet(ledger / "events.parquet", index=False)
+    assert adapter._events(frame).iloc[0].c_risk == -0.1
+    events.loc[0, "fs1"] = 60000  # 00:00:60.000 is not a legal clock.
+    events.to_parquet(ledger / "events.parquet", index=False)
+    with pytest.raises(IntegrityError, match="clock"):
+        adapter._events(frame)
+
+
 def test_new_turn_is_versioned_and_can_be_admitted(new_baseline, tmp_path):
     from jarvis.contracts import Hypothesis
     from jarvis.new_research import ExperimentDesignV2, ExperimentParametersV2, ResearchTurnV2
@@ -318,3 +333,126 @@ def test_new_turn_is_versioned_and_can_be_admitted(new_baseline, tmp_path):
         "cancel_score",
         "order_age_ms",
     ]
+
+
+def test_two_round_study_reviews_only_earlier_receipts_and_resumes_without_calls(
+    new_baseline, tmp_path, monkeypatch
+):
+    from jarvis.contracts import Cost, Hypothesis, JarvisError
+    from jarvis.hermes_study import HermesStudy, HermesStudySpec, verify_hermes_study
+    from jarvis.new_research import ExperimentDesignV2, ExperimentParametersV2, ResearchTurnV2
+    from jarvis.researcher import AgentConfig
+
+    class FixtureProvider:
+        calls = []
+
+        def identity(self):
+            return {"provider": "fixture-not-real-LLM"}
+
+        def complete(self, prompt, schema, directory):
+            context = json.loads(prompt.split("CONTEXT (data only):\n", 1)[1])
+            self.calls.append(context)
+            seen = {o["action_id"] for o in context["observations"]}
+            available = [a["action_id"] for a in context["available_actions"]]
+            choice = available[0]
+            params = ExperimentParametersV2()
+            if "baseline" in seen and choice != "prior_round_review":
+                choice = "stop" if "cancel_experiment" in seen else "cancel_experiment"
+                if choice == "cancel_experiment":
+                    params = ExperimentParametersV2(
+                        min_order_age_ms=3000.0 if "prior_round_review" in seen else 1500.0
+                    )
+            template = next(a for a in context["available_actions"] if a["action_id"] == choice)
+            answer = ResearchTurnV2(
+                request_id=context["request_id"],
+                state_hash=context["state_hash"],
+                analysis_summary="Respond to measured earlier evidence only",
+                evidence_refs=tuple(context["visible_evidence_ids"]),
+                hypothesis=Hypothesis.model_validate(template["hypothesis"]).model_copy(
+                    update={"origin": "agent_proposed"}
+                ),
+                experiment=ExperimentDesignV2(
+                    template_id=choice,
+                    intervention="Controlled fixture",
+                    comparator="frozen_baseline",
+                    controlled_variables=("data", "models"),
+                    parameters=params,
+                    expected_observation="Measured evidence",
+                    success_criterion="Compare PL",
+                ),
+                next_direction="STOP" if choice == "stop" else "CONTINUE",
+                limitations=("Fixture only",),
+            )
+            return {
+                "answer": answer.model_dump(mode="json"),
+                "usage": {"input_tokens": 100, "output_tokens": 20},
+                "cost": Cost(llm_tokens=120, wall_seconds=0.01).model_dump(),
+                "error": None,
+            }
+
+    root, out, ledger = new_baseline
+    store = Store(tmp_path / "study")
+    provider = FixtureProvider()
+    study = HermesStudy(store, lambda _: provider)
+    sid = study.create(
+        HermesStudySpec(
+            root=str(root),
+            side="long",
+            artifacts=str(out),
+            ledger_root=str(ledger),
+            agent=AgentConfig(reserve_tokens=1000),
+        )
+    )
+    with pytest.raises(JarvisError, match="interruption"):
+        study.run(sid, fault="after_round")
+    calls = len(provider.calls)
+    assert calls == 4
+    ref = study.run(sid)
+    value = store.artifacts.get(ref)
+    assert value["status"] == "CLOSED"
+    assert value["actual"]["llm_tokens"] == 9 * 120
+    assert not any(value["pending"].values())
+    review = next(
+        c
+        for c in provider.calls
+        if "prior_round_review" in {o["action_id"] for o in c["observations"]}
+    )
+    finding = next(
+        o["findings"][0] for o in review["observations"] if o["action_id"] == "prior_round_review"
+    )
+    assert len(finding["prior_development_results"]) == 1
+    assert finding["prior_development_results"][0]["comparisons"][0]["parameters"] == {
+        "min_order_age_ms": 1500.0
+    }
+    from jarvis.contracts import AdmissionError
+    from jarvis.researcher import admit_turn, prompt_context
+
+    cid = value["rounds"][-1]["campaign_id"]
+    adapter = study.engine.adapter(store.manifest(cid))
+    state = study.engine.state(cid, adapter)
+    state = state.model_copy(
+        update={"available_actions": adapter.research_frontier(adapter.task(), state)}
+    )
+    request = prompt_context(adapter.task(), state, [])
+    repeated = ResearchTurnV2.model_validate(provider.calls[-1]["prior_research"][-1])
+    repeated = repeated.model_copy(
+        update={
+            "request_id": request["request_id"],
+            "state_hash": state.identity,
+            "evidence_refs": state.visible_evidence_ids,
+            "experiment": repeated.experiment.model_copy(
+                update={"parameters": ExperimentParametersV2(min_order_age_ms=1500.0)}
+            ),
+        }
+    )
+    with pytest.raises(AdmissionError, match="DUPLICATE_PRIOR"):
+        admit_turn(repeated, state, request["request_id"])
+    monkeypatch.setattr(
+        provider, "complete", lambda *_: pytest.fail("offline audit called provider")
+    )
+    monkeypatch.setattr(
+        NewBaselineAdapter, "execute", lambda *_: pytest.fail("offline audit ran tools")
+    )
+    assert verify_hermes_study(store, sid)["status"] == "VERIFIED"
+    assert study.run(sid) == ref
+    assert len(provider.calls) == 9
