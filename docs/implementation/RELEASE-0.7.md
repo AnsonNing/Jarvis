@@ -19,6 +19,16 @@ verified both queues and their program offline. The declared director is an
 engineering control, not a real LLM. Artificial source was actually compiled and
 executed against a fixed toy evaluator. Remote Iris submissions: **zero**.
 
+The real Codex direction role subsequently completed two adaptive batches on the
+same compiled artificial backend: three novel candidates and one actual baseline
+execution, two completed provider calls, **31,601 observed tokens**, and zero
+pending resources. The next epoch reused its baseline. After observing a negative
+entry-rule result, the LLM proposed the complementary score interval while
+explicitly withholding a conclusion on a cancellation result not yet visible to
+that decision. Queue, role and program evidence verified offline. This proves
+the expanded structured interface can support actual LLM hypothesis, negative
+analysis and revision; the objective remains artificial and proves no market gain.
+
 Tests cover the closed DSL, unknown/unavailable signals, source-unit bounds,
 strict comparisons, canonical predicate ordering, nonfinite inputs, protected
 region lines, baseline entry gates, expiry precedence, clock conversion/hour
