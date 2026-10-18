@@ -205,6 +205,12 @@ class DirectorFixture:
                     origin="agent_proposed",
                 ).model_dump(mode="json")
             )
+        # Real structured completions may encode a declared float as JSON int.
+        # Receipts must stay raw while typed batch comparisons normalize it.
+        for experiment in experiments:
+            for key, value in experiment["settings"].items():
+                if type(value) is float and value.is_integer():
+                    experiment["settings"][key] = int(value)
         return {
             "answer": {
                 "kind": "ResearchDirections",

@@ -25,6 +25,7 @@ class ResearchProgramSpec(Record):
     directions: tuple[str, ...] = Field(min_length=1, max_length=12)
     agent: AgentConfig = AgentConfig(reserve_tokens=65536, max_calls=4)
     max_direction_batches: int = Field(default=3, ge=1, le=8, strict=True)
+    experiments_per_batch: int = Field(default=3, ge=1, le=3, strict=True)
     llm_token_budget: int = Field(default=300000, ge=65536, le=1000000, strict=True)
 
 
@@ -43,6 +44,10 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
         "primary_metric": "entry_only_pl",
         "risk": "Report all; no hidden penalty or metric change",
         "directions": spec.directions,
+        "batch_constraints": {
+            "experiments_maximum": spec.experiments_per_batch,
+            "direction_batches_maximum": spec.max_direction_batches,
+        },
         "scope": spec.queue.environment.period.exposure,
         "side": spec.queue.environment.side,
         "available_settings": [b.setting for b in spec.queue.environment.bindings],
@@ -206,6 +211,7 @@ class ResearchProgram:
             context = direction_context(self.store, program, qid)
             schema = strict_schema(DirectionBatch)
             schema["properties"]["context_id"]["enum"] = [digest(context)]
+            schema["properties"]["experiments"]["maxItems"] = spec.experiments_per_batch
             schema["$defs"]["IrisExperiment"]["properties"]["origin"]["enum"] = ["agent_proposed"]
             schema["$defs"]["IrisExperiment"]["properties"]["evidence_refs"]["items"]["enum"] = (
                 context["visible_evidence_ids"]
@@ -226,6 +232,8 @@ class ResearchProgram:
                 raw = DirectionBatch.model_validate(response["answer"])
                 if raw.context_id != digest(context):
                     raise AdmissionError("direction role used a stale context")
+                if len(raw.experiments) > spec.experiments_per_batch:
+                    raise AdmissionError("direction role exceeded the declared batch size")
                 prepared = {
                     "context_id": raw.context_id,
                     "visible_refs": context["visible_evidence_ids"],
@@ -338,7 +346,13 @@ def verify_program(store: Store, program: str) -> dict[str, Any]:
                     for k, v in observation["result"].items()
                 ):
                     raise IntegrityError("direction observation differs from its evidence")
-            completed_refs[p["receipt_ref"]] = p["answer_ref"]
+            # Raw structured JSON may represent a declared float as an integer.
+            # Preserve that original receipt, compare batch identity through the
+            # same declared model used when admitting the proposal.
+            if p.get("error") is None:
+                completed_refs[p["receipt_ref"]] = digest(
+                    DirectionBatch.model_validate(store.artifacts.get(p["answer_ref"]))
+                )
         if event["event_type"] in {"DIRECTION_BATCH_PREPARED", "DIRECTION_BATCH_ADMITTED"}:
             if completed_refs.get(p["receipt_ref"]) != p["batch_ref"]:
                 raise IntegrityError("direction batch lacks its observed role receipt")

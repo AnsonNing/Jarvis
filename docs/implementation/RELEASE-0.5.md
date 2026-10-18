@@ -32,3 +32,29 @@ and commands remain supported. A fully accepted multi-month package is required
 for the new real adapter; exposed historical months cannot authorize independent
 policy promotion. Full real efficacy and live trading are not demonstrated by
 this release's artificial acceptance.
+
+## Real LLM acceptance and recovery
+
+The actual Codex direction role completed two research batches on the artificial
+strategy backend: two linked epochs, three distinct candidate executions plus one
+baseline execution, two completed provider calls and **28,033 observed tokens**.
+The second epoch reused its baseline. Direction usage is fully settled with zero
+pending cost. The actual program, queue receipts and history verified offline.
+This demonstrates autonomous hypothesis/design/analysis/revision; its objective
+values are artificial and establish no trading gain.
+
+That run exposed a report audit issue: valid raw JSON used integers for declared
+floating-point settings. The verifier now compares both artifacts through the
+declared `DirectionBatch` schema while retaining the original provider receipt.
+The completed program was recovered by report verification only, without another
+provider call or experiment. A regression test deliberately returns integer
+settings. After repair, the full suite passed again: **141 passed in 52.44s**;
+Ruff and mypy passed.
+
+A separate real policy-developer call exceeded its 180-second envelope without
+a completion/usage receipt. It remains **NEEDS_RECONCILIATION**, with one retained
+65,536-token reservation and no policy finalist or promotion. It was not retried.
+Incomplete Dream reports now expose that status and pending resources. This call
+is not counted as a completed real LLM Dream-RSI acceptance. The declared-policy
+fixture's full heldout/fresh/canary/rollback acceptance remains independently
+verified. Real market policy validation remains gated by independent histories.

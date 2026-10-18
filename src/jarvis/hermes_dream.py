@@ -519,6 +519,30 @@ class HermesDream:
         return value
 
 
+def hermes_dream_report(store: Store, study: str) -> dict[str, Any]:
+    events = store.events(study)
+    final = [e for e in events if e["event_type"] == "HERMES_DREAM_COMPLETED"]
+    if final:
+        verification = verify_hermes_dream(store, study)
+        return dict(store.artifacts.get(verification["report_ref"]))
+    manifest = store.manifest(study)
+    spec = HermesDreamSpec.model_validate(manifest["spec"])
+    frozen = [
+        e["payload"]["policy_ref"] for e in events if e["event_type"] == "HERMES_FINALIST_FROZEN"
+    ]
+    return {
+        "kind": "HermesDreamProgress",
+        "study_id": study,
+        "status": store.status(study),
+        "active_policy": spec.incumbent.model_dump(mode="json"),
+        "finalist_refs": frozen,
+        "usage": store.resource_totals(study),
+        "role_receipt_verification": verify_roles(store, study),
+        "formal_verdict": "NOT_COMPLETE",
+        "deployment": "NOT_RUN",
+    }
+
+
 def verify_hermes_dream(store: Store, study: str) -> dict[str, Any]:
     manifest = store.manifest(study)
     spec = HermesDreamSpec.model_validate(manifest["spec"])

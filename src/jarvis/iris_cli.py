@@ -44,6 +44,7 @@ def add_commands(commands: Any) -> None:
     prepare.add_argument("--direction", action="append", required=True)
     prepare.add_argument("--goal", default="最大化 entry-only PL，完整保留風險、負面結果與資料限制")
     prepare.add_argument("--batches", type=int, default=3)
+    prepare.add_argument("--experiments-per-batch", type=int, default=3)
     prepare.add_argument("--executable", default="codex")
     prepare.add_argument("--output", type=Path, required=True)
     for name in ["advance", "report"]:
@@ -163,6 +164,7 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 directions=tuple(args.direction),
                 max_direction_batches=args.batches,
+                experiments_per_batch=args.experiments_per_batch,
                 agent=AgentConfig(
                     executable=args.executable,
                     max_calls=args.batches,
@@ -196,7 +198,12 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
                 poll_seconds=args.poll_seconds,
             )
         return program_report(store, args.program_id)
-    from jarvis.hermes_dream import HermesDream, HermesDreamSpec, verify_hermes_dream
+    from jarvis.hermes_dream import (
+        HermesDream,
+        HermesDreamSpec,
+        hermes_dream_report,
+        verify_hermes_dream,
+    )
 
     engine = HermesDream(store)
     if args.operation == "start":
@@ -206,5 +213,8 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
         }
     if args.operation == "advance":
         return engine.advance(args.study_id)
-    result = verify_hermes_dream(store, args.study_id)
-    return result if args.operation == "verify" else dict(store.artifacts.get(result["report_ref"]))
+    return (
+        verify_hermes_dream(store, args.study_id)
+        if args.operation == "verify"
+        else hermes_dream_report(store, args.study_id)
+    )

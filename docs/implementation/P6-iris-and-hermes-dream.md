@@ -77,6 +77,8 @@ Its evidence snapshot is frozen before its call. A subsequent catalog goes in a
 new linked epoch; it cannot rewrite the old tree after learning its outcomes.
 Each epoch admits at most `max_tasks`; batches are separately bounded by
 `max_direction_batches`, LLM call/token budget and the shared submission grant.
+Set `experiments_per_batch=1` for gradual single-candidate adaptive rounds;
+`research prepare --experiments-per-batch 1` emits that closed contract.
 Known identical candidates are deduplicated across compatible linked epochs.
 
 ## Fixed objective and risk evidence
