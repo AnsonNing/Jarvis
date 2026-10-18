@@ -111,6 +111,14 @@ class Store:
                     campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id),
                     command TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS budget_links (
+                    member TEXT PRIMARY KEY REFERENCES campaigns(id),
+                    owner TEXT NOT NULL REFERENCES campaigns(id)
+                );
+                CREATE TRIGGER IF NOT EXISTS budget_links_no_update BEFORE UPDATE ON budget_links
+                  BEGIN SELECT RAISE(ABORT, 'sealed budget lineage'); END;
+                CREATE TRIGGER IF NOT EXISTS budget_links_no_delete BEFORE DELETE ON budget_links
+                  BEGIN SELECT RAISE(ABORT, 'sealed budget lineage'); END;
                 CREATE TABLE IF NOT EXISTS policy_family_use (
                     family_key TEXT PRIMARY KEY,
                     purpose TEXT NOT NULL,
@@ -173,6 +181,10 @@ class Store:
         ref = self.artifacts.put(manifest)
         with self.transaction() as conn:
             conn.execute("INSERT INTO campaigns VALUES (?, ?)", (campaign_id, ref))
+            if manifest.get("budget_owner"):
+                conn.execute(
+                    "INSERT INTO budget_links VALUES (?,?)", (campaign_id, manifest["budget_owner"])
+                )
             self._append(conn, campaign_id, "CREATED", {"manifest_ref": ref})
             self._append(conn, campaign_id, "STATUS", {"status": "READY"})
         return campaign_id
@@ -277,17 +289,91 @@ class Store:
                 totals[section][key] += value
         return totals
 
+    def resource_members(self, owner: str) -> list[str]:
+        with self.connect() as conn:
+            members = self._budget_members(conn, owner)
+            for member in members:
+                parent = conn.execute(
+                    "SELECT owner FROM budget_links WHERE member=?", (member,)
+                ).fetchone()
+                if self.manifest(member).get("budget_owner") != (parent[0] if parent else None):
+                    raise IntegrityError("budget lineage differs from sealed manifest")
+        return members
+
+    @staticmethod
+    def _budget_members(conn: sqlite3.Connection, owner: str) -> list[str]:
+        return [
+            r[0]
+            for r in conn.execute(
+                "WITH RECURSIVE scope(id) AS (SELECT ? UNION SELECT member FROM budget_links JOIN scope ON owner=scope.id) SELECT id FROM scope",
+                (owner,),
+            )
+        ]
+
+    def resource_totals_tree(self, owner: str) -> dict[str, dict[str, float]]:
+        totals = {"actual": Cost().dimensions(), "pending": Cost().dimensions()}
+        for member in self.resource_members(owner):
+            for section, values in self.resource_totals(member).items():
+                for key, value in values.items():
+                    totals[section][key] += value
+        return totals
+
     def reserve(self, campaign_id: str, request: dict[str, Any], cost: Cost) -> str:
         manifest = self.manifest(campaign_id)
         limits = Budget.model_validate(manifest["task"]["budget"]).limits()
         request_ref = self.artifacts.put(request)
         job_id = "job-" + uuid.uuid4().hex
         with self.transaction() as conn:
+            # Check all ancestor envelopes in the same write transaction as the
+            # child reservation. Sibling queues cannot overspend a program cap.
+            parent = manifest.get("budget_owner")
+            while parent:
+                parent_manifest = self.manifest(parent)
+                members = self._budget_members(conn, parent)
+                aggregate = Cost().dimensions()
+                active_total = 0
+                for member in members:
+                    for row in conn.execute(
+                        "SELECT actual,reservation FROM jobs WHERE campaign_id=?", (member,)
+                    ):
+                        active_total += row["actual"] is None
+                        for key, value in (
+                            Cost.model_validate_json(row["actual"] or row["reservation"])
+                            .dimensions()
+                            .items()
+                        ):
+                            aggregate[key] += value
+                parent_budget = Budget.model_validate(parent_manifest["task"]["budget"])
+                if (
+                    datetime.now(UTC) - datetime.fromisoformat(parent_manifest["created_at"])
+                ).total_seconds() >= parent_budget.max_wall_seconds:
+                    raise BudgetExceeded("shared program elapsed-time envelope exceeded")
+                if active_total >= parent_budget.max_parallel_jobs:
+                    raise BudgetExceeded("shared max_parallel_jobs reached")
+                if any(
+                    aggregate[k] + v > parent_budget.limits()[k] + 1e-9
+                    for k, v in cost.dimensions().items()
+                ):
+                    raise BudgetExceeded("shared program budget exceeded")
+                parent = parent_manifest.get("budget_owner")
             used = self._usage(conn, campaign_id)
+            # The owner itself must also account for its descendants.
+            descendants = self._budget_members(conn, campaign_id)
+            if (manifest.get("budget_owner") or len(descendants) > 1) and (
+                datetime.now(UTC) - datetime.fromisoformat(manifest["created_at"])
+            ).total_seconds() >= limits["wall_seconds"]:
+                raise BudgetExceeded("shared program elapsed-time envelope exceeded")
+            for child in descendants[1:]:
+                for key, value in self._usage(conn, child).items():
+                    used[key] += value
             active = conn.execute(
                 "SELECT count(*) FROM jobs WHERE campaign_id=? AND actual IS NULL",
                 (campaign_id,),
             ).fetchone()[0]
+            for child in descendants[1:]:
+                active += conn.execute(
+                    "SELECT count(*) FROM jobs WHERE campaign_id=? AND actual IS NULL", (child,)
+                ).fetchone()[0]
             if active >= manifest["task"]["budget"]["max_parallel_jobs"]:
                 raise BudgetExceeded("max_parallel_jobs reached")
             for key, value in cost.dimensions().items():

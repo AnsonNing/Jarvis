@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 
 from jarvis.campaign import code_provenance, source_identity
 from jarvis.contracts import AdmissionError, Budget, Cost, IntegrityError, JarvisError, Record
+from jarvis.hermes_policy import HermesPolicy
 from jarvis.identity import digest
 from jarvis.iris import IrisTransport, LocalIrisTransport, verify_environment
 from jarvis.iris_contracts import IrisAuthorization, IrisQueueSpec
@@ -48,6 +49,10 @@ class IrisContinuousSpec(Record):
     directions: tuple[str, ...] = Field(min_length=1, max_length=12)
     agent: AgentConfig = AgentConfig(reserve_tokens=65536, max_calls=3, timeout_seconds=180)
     critic: AgentConfig | None = None
+    research_policy: HermesPolicy | None = None
+    policy_registry: str | None = None
+    execution_budget: Budget | None = None
+    experiments_per_epoch: int = Field(default=3, ge=1, le=3, strict=True)
     rounds_per_program: int = Field(default=3, ge=1, le=8, strict=True)
     max_experiments_per_batch: int = Field(default=2, ge=1, le=3, strict=True)
     primary_metric: Literal["entry_only_pl"] = "entry_only_pl"
@@ -59,6 +64,10 @@ class IrisContinuousSpec(Record):
             raise ValueError("duplicate research tracks")
         if self.agent.max_calls < self.rounds_per_program:
             raise ValueError("agent call envelope cannot cover rolling program rounds")
+        if (self.research_policy or self.policy_registry) and (
+            self.critic is None or self.execution_budget is None
+        ):
+            raise ValueError("policy adoption requires Critic and complete resource envelope")
         return self
 
 
@@ -79,7 +88,7 @@ class IrisContinuousStudy:
             store, provider_factory=provider_factory, transport_factory=transport_factory
         )
 
-    def create(self, spec: IrisContinuousSpec) -> str:
+    def create(self, spec: IrisContinuousSpec, *, budget_owner: str | None = None) -> str:
         for track in spec.tracks:
             for q in [track.smoke, track.development]:
                 verify_environment(q.environment)
@@ -87,6 +96,7 @@ class IrisContinuousStudy:
         return self.store.create(
             {
                 "kind": "IrisContinuousStudy",
+                **({"budget_owner": budget_owner} if budget_owner else {}),
                 "spec": spec.model_dump(mode="json"),
                 "provider": descriptor,
                 "source_identity": source_identity(),
@@ -96,6 +106,8 @@ class IrisContinuousStudy:
                     "budget": Budget(
                         max_actions=1000000,
                         max_tool_calls=1000000,
+                        max_llm_tokens=1000000000 if spec.execution_budget else 0,
+                        max_compute_units=1000000 if spec.execution_budget else 40,
                         max_wall_seconds=100000000,
                         max_parallel_jobs=1,
                     ).model_dump()
@@ -262,9 +274,12 @@ class IrisContinuousStudy:
             directions=spec.directions,
             agent=cfg,
             critic=spec.critic,
+            research_policy=spec.research_policy,
+            execution_budget=spec.execution_budget,
+            experiments_per_epoch=spec.experiments_per_epoch,
             max_direction_batches=rounds,
             experiments_per_batch=1
-            if phase == "smoke"
+            if phase == "smoke" and spec.research_policy is None and spec.policy_registry is None
             else min(
                 spec.max_experiments_per_batch,
                 max(
@@ -275,7 +290,27 @@ class IrisContinuousStudy:
                 ),
             ),
         )
-        pid = self.program.create(program_spec)
+        adoption = {}
+        if spec.policy_registry:
+            from jarvis.reviewed_registry import ReviewedPolicyRegistry
+
+            with self.store.campaign_lock(spec.policy_registry):
+                active, version = ReviewedPolicyRegistry(self.store).active(
+                    spec.policy_registry, program_spec
+                )
+                program_spec = program_spec.model_copy(update={"research_policy": active})
+                adoption = {
+                    "registry_id": spec.policy_registry,
+                    "registry_version": version,
+                    "policy_id": digest(active),
+                }
+                pid = self.program.create(
+                    program_spec, budget_owner=owner if spec.execution_budget else None
+                )
+        else:
+            pid = self.program.create(
+                program_spec, budget_owner=owner if spec.execution_budget else None
+            )
         self.store.append(
             owner,
             "IRIS_PROGRAM_REGISTERED",
@@ -285,6 +320,7 @@ class IrisContinuousStudy:
                 "program_id": pid,
                 "program_spec_ref": self.store.artifacts.put(program_spec),
                 "generation": len(links) + 1,
+                **({"policy_adoption": adoption} if adoption else {}),
             },
         )
         return pid
@@ -477,6 +513,22 @@ def continuous_report(store: Store, owner: str) -> dict[str, Any]:
             or declared.queue.operating_owner != owner
         ):
             raise IntegrityError("continuous program escaped its registered declaration")
+        if spec.execution_budget and store.manifest(p["program_id"]).get("budget_owner") != owner:
+            raise IntegrityError("continuous program escaped shared cost lineage")
+        if spec.policy_registry:
+            from jarvis.reviewed_registry import ReviewedPolicyRegistry
+
+            active, version = ReviewedPolicyRegistry(store).active(
+                spec.policy_registry,
+                declared,
+                at_time=store.manifest(p["program_id"])["created_at"],
+            )
+            if declared.research_policy != active or p.get("policy_adoption") != {
+                "registry_id": spec.policy_registry,
+                "registry_version": version,
+                "policy_id": digest(active),
+            }:
+                raise IntegrityError("continuous program adopted an unapproved/future policy")
         programs.append({**p, "report": report})
         for result in report["experiments"]:
             results[result["result_ref"]] = {**result, "track": p["track"], "phase": p["phase"]}
@@ -505,8 +557,10 @@ def continuous_report(store: Store, owner: str) -> dict[str, Any]:
         "quota": QuotaLedger(store, owner, spec.quota_policy).status(),
         "quota_verification": verify_quota(store, owner, spec.quota_policy),
         "operating_usage": store.resource_totals(owner),
+        "full_usage": store.resource_totals_tree(owner),
+        "policy_registry": spec.policy_registry,
         "formal_strategy_validation": "NOT_RUN",
-        "policy_promotion": "NOT_RUN",
+        "policy_promotion": "REGISTRY_ADOPTION_VERIFIED" if spec.policy_registry else "NOT_RUN",
         "deployment": "NOT_RUN",
         "verification": {"status": "VERIFIED", "external_calls": 0},
     }

@@ -8,7 +8,7 @@ from pydantic import Field
 
 from jarvis.campaign import code_provenance, source_identity
 from jarvis.contracts import AdmissionError, Budget, BudgetExceeded, IntegrityError, Record
-from jarvis.hermes_policy import seal_world, verify_world
+from jarvis.hermes_policy import HermesPolicy, seal_world, verify_world
 from jarvis.identity import digest
 from jarvis.iris import IrisTransport, LocalIrisTransport, setting_capabilities
 from jarvis.iris_contracts import IrisExperiment, IrisQueueSpec
@@ -32,6 +32,9 @@ class ResearchProgramSpec(Record):
     directions: tuple[str, ...] = Field(min_length=1, max_length=12)
     agent: AgentConfig = AgentConfig(reserve_tokens=65536, max_calls=4)
     critic: AgentConfig | None = None
+    research_policy: HermesPolicy | None = None
+    experiments_per_epoch: int = Field(default=3, ge=1, le=3, strict=True)
+    execution_budget: Budget | None = None
     max_direction_batches: int = Field(default=3, ge=1, le=8, strict=True)
     experiments_per_batch: int = Field(default=3, ge=1, le=3, strict=True)
     llm_token_budget: int = Field(default=300000, ge=65536, le=1000000, strict=True)
@@ -140,7 +143,11 @@ class ResearchProgram:
         self.critic_provider_factory = critic_provider_factory or provider_factory
         self.queue = IrisResearchQueue(store, transport_factory)
 
-    def create(self, spec: ResearchProgramSpec) -> str:
+    def create(self, spec: ResearchProgramSpec, *, budget_owner: str | None = None) -> str:
+        if spec.research_policy and (spec.critic is None or spec.execution_budget is None):
+            raise AdmissionError(
+                "policy-controlled research requires Critic and shared execution budget"
+            )
         # No provider call. Queue validation/admission occurs before attaching a child.
         self.queue.transport_factory(spec.queue.environment)
         provider = self.provider_factory(spec.agent).identity()
@@ -152,6 +159,7 @@ class ResearchProgram:
         return self.store.create(
             {
                 "kind": "ResearchProgram",
+                **({"budget_owner": budget_owner} if budget_owner else {}),
                 "spec": spec.model_dump(mode="json"),
                 "world_id": digest(
                     {"spec": spec.model_dump(mode="json"), "provider": provider, **critic_identity}
@@ -159,10 +167,13 @@ class ResearchProgram:
                 "provider": provider,
                 **critic_identity,
                 "task": {
-                    "budget": Budget(
-                        max_llm_tokens=spec.llm_token_budget,
-                        max_wall_seconds=3600,
-                        max_parallel_jobs=1,
+                    "budget": (
+                        spec.execution_budget
+                        or Budget(
+                            max_llm_tokens=spec.llm_token_budget,
+                            max_wall_seconds=3600,
+                            max_parallel_jobs=1,
+                        )
                     ).model_dump()
                 },
                 "source_identity": source_identity(),
@@ -501,6 +512,7 @@ def program_report(store: Store, program: str) -> dict[str, Any]:
         for r in valid
         if baseline and r["experiment"]["family"] != "baseline"
     ]
+    usage_rows = [store.resource_totals(p) for p in [program, *links]]
     return {
         "kind": "ResearchProgramReport",
         "program_id": program,
@@ -529,6 +541,17 @@ def program_report(store: Store, program: str) -> dict[str, Any]:
         "direction_usage": role_resources(store, program, "direction"),
         "critic_usage": role_resources(store, program, "critic"),
         "llm_usage": store.resource_totals(program),
+        "full_usage": {
+            section: {
+                key: sum(row[section][key] for row in usage_rows) for key in usage_rows[0][section]
+            }
+            for section in ["actual", "pending"]
+        },
+        "shared_budget_enforced": spec.execution_budget is not None,
+        "research_policy": spec.research_policy.model_dump(mode="json")
+        if spec.research_policy
+        else None,
+        "cost_scope": "all role, compile, import and backend jobs; local work seconds; remote compute/queue and monetary cost unavailable",
         "role_calls": {
             role: sum(
                 e["event_type"] == "ROLE_COMPLETED" and e["payload"]["role"] == role

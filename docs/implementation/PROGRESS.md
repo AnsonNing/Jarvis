@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-18. Release: 0.9.0. Synthetic Dream-RSI, Hermes baseline admission, adaptive real LLM research, continuous Iris research, closed strategy design, execution-free preparation and independent proposal/result critique are available.
+Date: 2026-10-19. Release: 0.10.0. Synthetic Dream-RSI now feeds selected exploration policies into actual Research Agent + Critic continuous programs, with full-program shared budgets, matched fresh comparisons, canary rollback and subsequent history reuse. Hermes baseline admission, adaptive real LLM research, closed strategy design and execution-free preparation remain available. Real Hermes research remains unstarted.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -23,11 +23,13 @@ Date: 2026-10-18. Release: 0.9.0. Synthetic Dream-RSI, Hermes baseline admission
 | P8 strategy-design rules | VERIFIED_WITH_LIMITATIONS | Typed all/any entry/cancel predicates, session clocks, quantity and position limits; owner-pinned source bindings and compile receipts; five compiled artificial executions across two adaptive epochs preserve positive/negative findings; quiescent predecessor handoff retains histories and shared quota |
 | P9 research readiness | VERIFIED_WITH_LIMITATIONS | Explicit logical-case replacement proof, retained unknown requests, completed-findings attention state, owner-bound development-use records and store-free readiness; stopped unstarted watchers remain stopped; four supplied baseline ledgers recomputed and four source compilations passed locally, with no new research/LLM/backend submission |
 | P10 independent Critic | VERIFIED_WITH_LIMITATIONS | Two-stage separate provider calls, approval-before-enqueue, result critique, causal next-round feedback, receipt recovery, shared budgets and continuous stop propagation; two artificial epochs and a real three-call LLM/artificial-backend acceptance completed. No new real Hermes research or efficiency-gain claim |
+| P11 reviewed Dream feedback | VERIFIED_WITH_LIMITATIONS | Selected policy controls actual reviewed epochs and new continuous programs; full role/compile/backend costs share an atomic budget; independent fresh/canary programs, adopted policy and measured rollback, new history and second Dream screening pass artificial acceptance. Scripted providers use simulated units; no real-domain policy/efficiency verdict |
 
-Validation after independent Critic integration: **214 tests passed in
-89.72s**, Ruff lint/format passed for 83 Python
-files and mypy passed for 60 source modules. Schema export, task CLI and complete local
-synthetic/Hermes workflows. The final acceptance count and exact commands are
+Validation after reviewed Dream feedback integration: **232 tests passed in
+187.21s**, Ruff lint/format passed for 89 Python
+files and mypy passed for 65 source modules. Dependency check, schema export,
+bounded runner CLI, complete reviewed Dream fixture and historical Critic offline
+verification passed. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.
 
@@ -46,9 +48,11 @@ after acceptance without claiming an independent real-policy verdict.
 
 [Continuous Iris research](P7-continuous-iris-research.md) removes a fixed lifetime
 experiment-count limit while preserving finite program budgets. It continues L1
-strategy research; it does not automatically activate a new L3 policy. Research
-policy promotion still requires distinct histories and independent heldout/fresh
-tasks. L2 capability learning and arbitrary new strategy source remain incomplete.
+strategy research. [Reviewed Dream feedback](P11-reviewed-dream-loop.md) can now
+explicitly adopt a validated exploration policy through a scoped registry in
+new reviewed programs. Research-policy promotion still requires distinct
+histories and independent heldout/fresh tasks; canary regression rolls it back.
+L2 capability learning and arbitrary new strategy source remain incomplete.
 
 [Strategy-design research](P8-strategy-design.md) adds bounded rules and private
 source compilation. It preserves active older runtimes in their original checkout;

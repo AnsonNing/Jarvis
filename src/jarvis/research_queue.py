@@ -82,7 +82,7 @@ class IrisResearchQueue:
         self.store = store
         self.transport_factory = transport_factory
 
-    def create(self, spec: IrisQueueSpec) -> str:
+    def create(self, spec: IrisQueueSpec, *, budget_owner: str | None = None) -> str:
         verify_environment(spec.environment)
         for prior in spec.prior_queues:
             verify_queue(self.store, prior)
@@ -90,6 +90,7 @@ class IrisResearchQueue:
         return self.store.create(
             {
                 "kind": "IrisResearchQueue",
+                **({"budget_owner": budget_owner} if budget_owner else {}),
                 "spec": spec.model_dump(mode="json"),
                 "task": {"budget": spec.budget.model_dump()},
                 "world_id": digest(spec),

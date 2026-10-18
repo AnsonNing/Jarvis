@@ -154,7 +154,11 @@ def _context(store: Store, program: str, qid: str, batch_ref: str, phase: str) -
         "outcomes": [
             {
                 "experiment_ref": p["experiment_ref"],
-                "status": rows.get(p["experiment_ref"], {}).get("status", "NOT_EXECUTED"),
+                "status": (
+                    rows.get(p["experiment_ref"], {}).get("status", "NOT_EXECUTED")
+                    if rows.get(p["experiment_ref"], {}).get("status") in TERMINAL
+                    else "NOT_EXECUTED"
+                ),
                 "result_ref": rows.get(p["experiment_ref"], {}).get("result_ref"),
             }
             for p in proposals
@@ -253,7 +257,9 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
     spec = ResearchProgramSpec.model_validate(store.manifest(program)["spec"])
     links = [p["queue_id"] for p in _events(store, program, "RESEARCH_QUEUE_ATTACHED")]
     if not links:
-        qid = engine.queue.create(spec.queue)
+        qid = engine.queue.create(
+            spec.queue, budget_owner=program if spec.execution_budget else None
+        )
         store.append(program, "RESEARCH_QUEUE_ATTACHED", {"queue_id": qid})
         links = [qid]
     qid = links[-1]
@@ -325,7 +331,17 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
         engine._admit(program, qid, prepared, review_ref=pre["review_ref"])
         return {**answer, "status": "CRITIC_REVIEWED_ADMISSION"}
     rows = queue_tasks(store, qid)
-    if any(t["status"] not in TERMINAL for t in rows):
+    policy_stop = False
+    if spec.research_policy:
+        from jarvis.reviewed_policy import decide
+
+        if any(t["status"] == "RUNNING" for t in rows):
+            return {**answer, **engine.queue.tick(qid)}
+        decision = decide(store, program, qid)
+        if decision["selected_task"] is not None:
+            return {**answer, **engine.queue.tick(qid, selected_task=decision["selected_task"])}
+        policy_stop = decision["stop_program"]
+    elif any(t["status"] not in TERMINAL for t in rows):
         return {**answer, **engine.queue.tick(qid)}
     post = _review(engine, program, qid, batch_ref, "results")
     if not any(p["queue_id"] == qid for p in _events(store, program, "PROGRAM_WORLD_COLLECTED")):
@@ -337,6 +353,7 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
         or store.artifacts.get(pre["review_ref"])["stop_recommended"]
         or store.artifacts.get(post["review_ref"])["stop_recommended"]
         or len(_events(store, program, "DIRECTION_BATCH_ADMITTED")) >= spec.max_direction_batches
+        or policy_stop
     )
     if stop:
         store.append(program, "RESEARCH_STOPPED", {"reason": str(stop), "kind": "REVIEWED_CLOSE"})
@@ -345,7 +362,8 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
     child = engine.queue.create(
         spec.queue.model_copy(
             update={"prior_queues": tuple(dict.fromkeys([*spec.queue.prior_queues, *links]))}
-        )
+        ),
+        budget_owner=program if spec.execution_budget else None,
     )
     store.append(program, "RESEARCH_QUEUE_ATTACHED", {"queue_id": child})
     return {**answer, "queue_id": child, "status": "NEXT_REVIEWED_EPOCH_READY"}
@@ -357,6 +375,9 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
 
     manifest = store.manifest(program)
     spec = ResearchProgramSpec.model_validate(manifest["spec"])
+    from jarvis.reviewed_policy import verify_policy_decisions
+
+    verify_policy_decisions(store, program)
     links: list[str] = []
     frozen: dict[str, dict[str, Any]] = {}
     completed: dict[str, dict[str, Any]] = {}
@@ -384,6 +405,11 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
             ):
                 raise IntegrityError("reviewed queue escaped fixed controls or result review")
             verify_queue(store, p["queue_id"])
+            if (
+                spec.execution_budget
+                and store.manifest(p["queue_id"]).get("budget_owner") != program
+            ):
+                raise IntegrityError("queue escaped shared program budget")
             links.append(p["queue_id"])
         elif kind == "PROGRAM_ROLE_REQUESTED":
             context = store.artifacts.get(p["context_ref"])
@@ -435,7 +461,11 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
                     if context["outcomes"] or qid in admitted:
                         raise IntegrityError("proposal review disclosed future outcomes")
                 else:
-                    if qid not in admitted or any(t["status"] not in TERMINAL for t in known_rows):
+                    if qid not in admitted or any(
+                        t["status"] not in TERMINAL
+                        and not (spec.research_policy and t["status"] == "QUEUED")
+                        for t in known_rows
+                    ):
                         raise IntegrityError("result review preceded completed execution")
                     by_experiment = {
                         digest(
@@ -446,12 +476,18 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
                     expected_outcomes = []
                     for proposal in context["proposals"]:
                         row = by_experiment.get(proposal["experiment_ref"])
-                        if row and (row.get("result_ref") not in available):
+                        if (
+                            row
+                            and row.get("result_ref")
+                            and (row.get("result_ref") not in available)
+                        ):
                             raise IntegrityError("result review used future execution evidence")
                         expected_outcomes.append(
                             {
                                 "experiment_ref": proposal["experiment_ref"],
-                                "status": row["status"] if row else "NOT_EXECUTED",
+                                "status": row["status"]
+                                if row and row["status"] in TERMINAL
+                                else "NOT_EXECUTED",
                                 "result_ref": row.get("result_ref") if row else None,
                             }
                         )

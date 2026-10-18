@@ -177,6 +177,7 @@ def run(args: argparse.Namespace) -> None:
             research_program,
             research_roles,
             researcher,
+            reviewed_dream,
             search_space,
             suite,
         )
@@ -204,6 +205,7 @@ def run(args: argparse.Namespace) -> None:
             research_critic,
             research_program,
             research_roles,
+            reviewed_dream,
             pool,
             search_space,
             suite,

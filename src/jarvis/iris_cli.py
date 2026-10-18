@@ -80,6 +80,15 @@ def add_commands(commands: Any) -> None:
     critic_fixture = research.add_parser("critic-fixture")
     critic_fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
     critic_fixture.add_argument("--executable", default="codex")
+    research.add_parser("dream-loop-fixture")
+    research.add_parser("dream-loop-start").add_argument("spec", type=Path)
+    for operation in ["dream-loop-advance", "dream-loop-report"]:
+        research.add_parser(operation).add_argument("study_id")
+    loop_run = research.add_parser("dream-loop-run")
+    loop_run.add_argument("study_id")
+    loop_run.add_argument("--max-steps", type=int, default=2000)
+    loop_run.add_argument("--wall-seconds", type=int, default=14400)
+    loop_run.add_argument("--poll-seconds", type=int, default=45)
     research.add_parser("start").add_argument("spec", type=Path)
     prepare = research.add_parser("prepare")
     prepare.add_argument("--environment", type=Path, required=True)
@@ -135,6 +144,33 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "research" and args.operation == "dream-loop-fixture":
+        from jarvis.reviewed_dream_fixture import run_reviewed_dream_fixture
+
+        return run_reviewed_dream_fixture(store)
+    if args.command == "research" and args.operation.startswith("dream-loop-"):
+        from jarvis.reviewed_dream import (
+            ReviewedDreamLoop,
+            ReviewedDreamSpec,
+            reviewed_dream_report,
+        )
+
+        loop_engine = ReviewedDreamLoop(store)
+        if args.operation == "dream-loop-start":
+            return {
+                "study_id": loop_engine.create(ReviewedDreamSpec.model_validate(read(args.spec))),
+                "status": "READY",
+            }
+        if args.operation == "dream-loop-advance":
+            return loop_engine.advance(args.study_id)
+        if args.operation == "dream-loop-run":
+            return loop_engine.run(
+                args.study_id,
+                max_steps=args.max_steps,
+                wall_seconds=args.wall_seconds,
+                poll_seconds=args.poll_seconds,
+            )
+        return reviewed_dream_report(store, args.study_id)
     if args.command == "research" and args.operation == "critic-fixture":
         from jarvis.critic_fixture import run_critic_fixture
 
