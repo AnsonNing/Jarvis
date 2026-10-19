@@ -35,6 +35,7 @@ class ResearchProgramSpec(Record):
     research_policy: HermesPolicy | None = None
     experiments_per_epoch: int = Field(default=3, ge=1, le=3, strict=True)
     execution_budget: Budget | None = None
+    support_ref: str | None = None
     max_direction_batches: int = Field(default=3, ge=1, le=8, strict=True)
     experiments_per_batch: int = Field(default=3, ge=1, le=3, strict=True)
     llm_token_budget: int = Field(default=300000, ge=65536, le=1000000, strict=True)
@@ -49,6 +50,7 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
     ]
     links = list(dict.fromkeys([*spec.queue.prior_queues, *links]))
     results = [r for q in links for r in visible_results(store, q)]
+    support = store.artifacts.get(spec.support_ref) if spec.support_ref else None
     return {
         "role": "direction",
         "goal": spec.queue.goal,
@@ -80,6 +82,11 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
             if e["event_type"] == "DIRECTION_BATCH_ADMITTED"
         ],
         "visible_evidence_ids": [r["result_ref"] for r in results],
+        **(
+            {"research_support": support, "research_support_ref": spec.support_ref}
+            if support
+            else {}
+        ),
         "observations": [
             {
                 "experiment": r["experiment"],
@@ -144,6 +151,10 @@ class ResearchProgram:
         self.queue = IrisResearchQueue(store, transport_factory)
 
     def create(self, spec: ResearchProgramSpec, *, budget_owner: str | None = None) -> str:
+        if spec.support_ref:
+            from jarvis.lab_contracts import ResearchSupport
+
+            ResearchSupport.model_validate(self.store.artifacts.get(spec.support_ref))
         if spec.research_policy and (spec.critic is None or spec.execution_budget is None):
             raise AdmissionError(
                 "policy-controlled research requires Critic and shared execution budget"

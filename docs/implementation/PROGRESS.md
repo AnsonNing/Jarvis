@@ -1,6 +1,6 @@
 # Verified implementation progress
 
-Date: 2026-10-19. Release: 0.10.0. Synthetic Dream-RSI now feeds selected exploration policies into actual Research Agent + Critic continuous programs, with full-program shared budgets, matched fresh comparisons, canary rollback and subsequent history reuse. Hermes baseline admission, adaptive real LLM research, closed strategy design and execution-free preparation remain available. Real Hermes research remains unstarted.
+Date: 2026-10-20. Release: 0.11.0. Research Lab now adds on-demand specialists, source discovery, human-input boards and scoped experience around the existing Research Agent + Critic. Research-method, closed diagnostic-capability and exploration-policy changes each pass prospective same-budget comparisons, independent validation, actual continuation and new-history feedback on artificial tasks. Real Hermes research remains unstarted.
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
@@ -12,7 +12,7 @@ Date: 2026-10-19. Release: 0.10.0. Synthetic Dream-RSI now feeds selected explor
 | P0.6–P0.9 fixture/evaluation/tree/Q0 | VERIFIED_WITH_LIMITATIONS | Four fixture worlds, fixed evaluator, formal freeze, causal tree, adaptive Q0; extended fixture matrix remains |
 | P1 LLM research loop | VERIFIED_WITH_LIMITATIONS | Real structured Codex provider; autonomous hypothesis/design/analysis/revision; four new-baseline real Hermes rounds CLOSED plus prior legacy acceptance; token/repair/recovery/replay verified |
 | P1 generated candidate builder | NOT_STARTED | Arbitrary generated-code execution awaits a separately verified isolation boundary |
-| P2 memory/capability RSI | PARTIAL | Scoped prior-round review reuses sealed real development comparisons with causal verification; general retrieval, utility/transfer validation and capability learning remain unimplemented |
+| P2 memory/capability RSI | VERIFIED_WITH_LIMITATIONS | Scoped experience retains actual observations/counter-evidence and provisional interpretations; compatible new-task reuse and negative control pass. One closed diagnostic has metered fidelity, independent utility and subsequent use; general capability acquisition and arbitrary generated code remain unimplemented |
 | P3 branching corpus | VERIFIED_WITH_LIMITATIONS | Twelve-tree, six-family corpus, real sibling execution, compatibility/splits, causal verification and coverage CLI; L2 transfer A/B remains unimplemented |
 | P4 synthetic Dream-RSI | VERIFIED_WITH_LIMITATIONS | Real developer and fixture control each completed three rounds plus fresh canary; exact replay, one finalist, independent/fresh gates, versioning and measured rollback. Final active policy Q0; no general efficacy claim |
 | P5 Hermes integration | VERIFIED_WITH_LIMITATIONS | Both new frozen baselines admitted, portable predictions agree exactly, four policies reproduced; four real LLM rounds CLOSED, causal review and offline replay verified. Real postfill quote paths and event acknowledgement backtester remain unavailable |
@@ -24,18 +24,20 @@ Date: 2026-10-19. Release: 0.10.0. Synthetic Dream-RSI now feeds selected explor
 | P9 research readiness | VERIFIED_WITH_LIMITATIONS | Explicit logical-case replacement proof, retained unknown requests, completed-findings attention state, owner-bound development-use records and store-free readiness; stopped unstarted watchers remain stopped; four supplied baseline ledgers recomputed and four source compilations passed locally, with no new research/LLM/backend submission |
 | P10 independent Critic | VERIFIED_WITH_LIMITATIONS | Two-stage separate provider calls, approval-before-enqueue, result critique, causal next-round feedback, receipt recovery, shared budgets and continuous stop propagation; two artificial epochs and a real three-call LLM/artificial-backend acceptance completed. No new real Hermes research or efficiency-gain claim |
 | P11 reviewed Dream feedback | VERIFIED_WITH_LIMITATIONS | Selected policy controls actual reviewed epochs and new continuous programs; full role/compile/backend costs share an atomic budget; independent fresh/canary programs, adopted policy and measured rollback, new history and second Dream screening pass artificial acceptance. Scripted providers use simulated units; no real-domain policy/efficiency verdict |
+| P12 research self-improvement | VERIFIED_WITH_LIMITATIONS | Parallel independent specialists and directed discussion, pinned human/source boards, live metadata adapters, scoped memory, method/capability/action-policy evolution and later profile use; 154 artificial executions, measured method rollback and two retained profiles; no real Hermes study or general autonomous skill claim |
 
-Validation after reviewed Dream feedback integration: **232 tests passed in
-187.21s**, Ruff lint/format passed for 89 Python
-files and mypy passed for 65 source modules. Dependency check, schema export,
-bounded runner CLI, complete reviewed Dream fixture and historical Critic offline
-verification passed. The final acceptance count and exact commands are
+Validation after multi-agent research integration: **259 tests passed in
+305.25s**, Ruff lint/format passed for 98 Python
+files and mypy passed for 73 source modules. Dependency check, 90-schema export,
+bounded runner CLI, task validation and complete self-improvement CLI fixture
+passed. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.
 Private numerical reports and raw receipts stay in ignored local storage.
 
 Next work packages: supply real quote/fill/fee data and order acknowledgement events;
-admit corresponding execution backends; persistent scoped L2 utility/capability
-validation; generated-code isolation. The typed local quote backend and data
+admit corresponding execution backends; extend beyond the single closed L2
+diagnostic with new independently validated tool operations; generated-code
+isolation and full-paper/code-reproduction adapters. The typed local quote backend and data
 requirements are already implemented and tested.
 Additional Dream rounds require independent new validation families after exposure;
 the synthetic fixture result does not authorize real-domain policy promotion.
@@ -52,7 +54,17 @@ strategy research. [Reviewed Dream feedback](P11-reviewed-dream-loop.md) can now
 explicitly adopt a validated exploration policy through a scoped registry in
 new reviewed programs. Research-policy promotion still requires distinct
 histories and independent heldout/fresh tasks; canary regression rolls it back.
-L2 capability learning and arbitrary new strategy source remain incomplete.
+Scoped L2 utility and reuse are now demonstrated for one closed diagnostic;
+general capability acquisition and arbitrary new strategy source remain incomplete.
+
+[Research self-improvement](P12-research-self-improvement.md) adds a bounded
+research-method layer and agent teams without editing the trusted kernel.
+Fresh profiles are pinned in subsequent tasks; separately validated axes cannot
+be combined without a new joint comparison. The method fixture deliberately
+regresses on a canary and rolls back; capability and policy fixtures retain
+their profiles. Each second proposal cycle stops for new independent validation.
+Public Crossref/GitHub queries returned real metadata, while all research
+acceptance used declared scripted providers and mathematical backends.
 
 [Strategy-design research](P8-strategy-design.md) adds bounded rules and private
 source compilation. It preserves active older runtimes in their original checkout;

@@ -122,12 +122,19 @@ def _call(
     identity = manifest["critic_provider"] if role == "critic" else manifest["provider"]
     if provider.identity() != identity:
         raise IntegrityError("declared research role provider changed")
+    guidance = None
+    if spec.support_ref:
+        from jarvis.lab_contracts import ResearchSupport
+
+        method = ResearchSupport.model_validate(store.artifacts.get(spec.support_ref)).method
+        guidance = method.critic_guidance if role == "critic" else method.director_guidance
     return RoleCaller(store, provider, config).call(
         program,
         role,
         store.artifacts.get(prior["context_ref"]),
         store.artifacts.get(prior["schema_ref"]),
         role_budget=True,
+        guidance=guidance,
     )
 
 
@@ -420,6 +427,10 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
                 if e["event_type"] == "IRIS_RESULT_RECORDED"
                 and e["recorded_at_utc"] <= event["recorded_at_utc"]
             }
+            if spec.support_ref:
+                available.add(spec.support_ref)
+                if context.get("research_support") != store.artifacts.get(spec.support_ref):
+                    raise IntegrityError("research support changed")
             prior_reviews = {v["review_ref"] for v in reviews.values()}
             if (
                 p["key"] in frozen

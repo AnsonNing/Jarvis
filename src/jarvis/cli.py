@@ -69,6 +69,9 @@ def parser() -> argparse.ArgumentParser:
     from jarvis.iris_cli import add_commands as add_iris_commands
 
     add_iris_commands(commands)
+    from jarvis.lab_cli import add_commands as add_lab_commands
+
+    add_lab_commands(commands)
     task = commands.add_parser("task").add_subparsers(dest="operation", required=True)
     task.add_parser("validate").add_argument("path", type=Path)
     schema = commands.add_parser("schema")
@@ -140,6 +143,12 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.command == "lab":
+        from jarvis.lab_cli import run as run_lab
+        from jarvis.storage import Store
+
+        emit(run_lab(Store(args.store), args))
+        return
     if args.command == "iris" and args.operation in {
         "model-status",
         "development-use",
@@ -170,6 +179,9 @@ def run(args: argparse.Namespace) -> None:
             iris_contracts,
             iris_design,
             iris_quota,
+            lab_contracts,
+            lab_evolution,
+            lab_memory,
             new_research,
             policy,
             pool,
@@ -202,6 +214,9 @@ def run(args: argparse.Namespace) -> None:
             iris_design,
             iris_continuous,
             iris_quota,
+            lab_contracts,
+            lab_evolution,
+            lab_memory,
             research_critic,
             research_program,
             research_roles,

@@ -158,7 +158,9 @@ class Store:
             conn.close()
 
     @contextlib.contextmanager
-    def campaign_lock(self, campaign_id: str, *, scope: str | None = None) -> Iterator[None]:
+    def campaign_lock(
+        self, campaign_id: str, *, scope: str | None = None, blocking: bool = False
+    ) -> Iterator[None]:
         self.manifest(campaign_id)
         if scope is not None and not re.fullmatch(r"[a-z-]+", scope):
             raise JarvisError("invalid coordinator lock scope")
@@ -167,7 +169,7 @@ class Store:
         suffix = "-" + scope if scope else ""
         with (locks / f"{campaign_id}{suffix}.lock").open("a") as stream:
             try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
             except BlockingIOError as exc:
                 raise JarvisError("campaign already has an active coordinator") from exc
             try:
