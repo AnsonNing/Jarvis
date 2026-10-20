@@ -40,6 +40,11 @@ class CodexProvider:
             "version": result.stdout.strip(),
             "executable_sha256": file_digest(self.executable),
             "model": self.config.model,
+            **(
+                {"reasoning_effort": self.config.reasoning_effort}
+                if self.config.reasoning_effort
+                else {}
+            ),
             "model_resolution": "explicit"
             if self.config.model
             else "CLI default; resolved model not reported by exec JSON",
@@ -79,6 +84,8 @@ class CodexProvider:
             cmd += ["-c", option]
         if self.config.model:
             cmd += ["--model", self.config.model]
+        if self.config.reasoning_effort:
+            cmd += ["-c", 'model_reasoning_effort="' + self.config.reasoning_effort + '"']
         return cmd + [
             "--output-schema",
             str(directory / "schema.json"),

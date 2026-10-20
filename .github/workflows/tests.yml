@@ -31,3 +31,4 @@ jobs:
       - run: jarvis --store /tmp/jarvis-critic-ci research critic-fixture
       - run: jarvis --store /tmp/jarvis-reviewed-dream-ci research dream-loop-fixture
       - run: jarvis --store /tmp/jarvis-lab-ci lab fixture
+      - run: jarvis --store /tmp/jarvis-session-ci lab session-fixture

@@ -221,7 +221,7 @@ def verify_quota(store: Store, owner: str, policy: IrisQuotaPolicy) -> dict[str,
     for identifier in identifiers:
         manifest = store.manifest(identifier)
         if (
-            manifest.get("kind") == "IrisContinuousStudy"
+            manifest.get("kind") in {"IrisContinuousStudy", "IrisLabSession"}
             and manifest["spec"]["quota_policy"]["scope"] == policy.scope
         ):
             parents[identifier] = IrisQuotaPolicy.model_validate(manifest["spec"]["quota_policy"])
@@ -318,11 +318,19 @@ def operating_ledger(store: Store, queue_spec: Any) -> QuotaLedger | None:
     if owner is None:
         return None
     manifest = store.manifest(owner)
-    if manifest["kind"] != "IrisContinuousStudy" or not manifest["spec"]["owner_instruction"]:
+    if (
+        manifest["kind"] not in {"IrisContinuousStudy", "IrisLabSession"}
+        or not manifest["spec"]["owner_instruction"]
+    ):
         raise IntegrityError("standing research authorization is absent")
-    environments = [
-        q["environment"] for t in manifest["spec"]["tracks"] for q in [t["smoke"], t["development"]]
-    ]
+    if manifest["kind"] == "IrisLabSession":
+        environments = [s["program"]["queue"]["environment"] for s in manifest["spec"]["stages"]]
+    else:
+        environments = [
+            q["environment"]
+            for t in manifest["spec"]["tracks"]
+            for q in [t["smoke"], t["development"]]
+        ]
     if digest(queue_spec.environment) not in {digest(e) for e in environments}:
         raise IntegrityError("queue escaped standing research environment scope")
     return QuotaLedger(

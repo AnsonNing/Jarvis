@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.11 adds on-demand research specialists, public literature/implementation metadata adapters, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution around the existing Research Agent + independent Critic path. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.12 adds selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Research Lab verifies scoped reuse and a closed numerical diagnostic capability on artificial tasks. General capability acquisition, arbitrary generated-code execution, model-weight updates and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -19,6 +19,8 @@ jarvis --store .jarvis/critic-fixture research critic-fixture
 jarvis --store .jarvis/reviewed-dream-fixture research dream-loop-fixture
 # Team, human/source inputs, experience and three prospective improvement axes:
 jarvis --store .jarvis/lab-fixture lab fixture
+# Sequential integration/development, shared quota, retrospective proposals and notebook:
+jarvis --store .jarvis/session-fixture lab session-fixture
 # Real LLM research on artificial objectives; still zero remote Iris submissions:
 jarvis --store .jarvis/strategy-llm-fixture research fixture --agent codex
 jarvis --store .jarvis/policy-llm-fixture hermes-dream fixture --agent codex
@@ -79,6 +81,15 @@ External source discovery is read-only and explicitly enabled. Crossref exposes
 metadata/available abstracts; GitHub exposes repository metadata. No discovered
 repository is installed or executed. All fixture sources and token units are
 clearly declared engineering controls. Cancelled Hermes workflows remain stopped.
+
+[Selected entry research sessions](docs/implementation/P13-entry-research-sessions.md)
+pin owner-selected model packages and original baseline receipts, including explicit
+calendar subsets evaluated locally from the original raw ledger. Every declared LLM
+role can pin its model and reasoning effort. Integration stages must demonstrate
+an observed intervention effect before development continues. A private notebook
+exports actual contexts, structured answers, cowork decisions, searches, costs,
+experiments and retrospective proposals. Development-only method/policy proposals
+and diagnostic fidelity do not establish independent Dream or capability utility.
 
 ## Run locally
 

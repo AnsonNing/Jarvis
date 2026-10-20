@@ -107,6 +107,11 @@ def protocol(spec: LabSpec) -> str:
             "external_search": spec.allow_external_search,
             "source_backend": spec.source_backend,
             "observed_backend_permission": spec.allow_observed_backend,
+            **(
+                {"selection_constraints": spec.program.acceptance.model_dump(mode="json")}
+                if spec.program.acceptance
+                else {}
+            ),
         }
     )
 
@@ -143,7 +148,14 @@ def episode_summary(store: Store, owner: str) -> dict[str, Any]:
         usage["actual"][k] + usage["pending"][k] <= limit + 1e-9
         for k, limit in budget.limits().items()
     )
-    best = report["program"]["best_development_candidate"] if report["program"] else None
+    program = report["program"]
+    best = (
+        program.get("best_qualified_candidate")
+        if program and program.get("selection_constraints")
+        else program["best_development_candidate"]
+        if program
+        else None
+    )
     return {
         "episode": owner,
         "complete": report["status"] == "CLOSED" and not any(usage["pending"].values()) and within,

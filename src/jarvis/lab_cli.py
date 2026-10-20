@@ -26,6 +26,7 @@ def add_commands(commands: Any) -> None:
     lab = commands.add_parser("lab").add_subparsers(dest="operation", required=True)
     lab.add_parser("fixture")
     lab.add_parser("team-fixture")
+    lab.add_parser("session-fixture")
     start = lab.add_parser("start")
     start.add_argument("spec", type=Path)
     start.add_argument("--profile", action="append", default=[])
@@ -53,10 +54,36 @@ def add_commands(commands: Any) -> None:
         "public_question", help="Explicit owner-approved PUBLIC query; no private strategy/data"
     )
     query.add_argument("--provider", choices=["crossref", "github"], default="crossref")
+    lab.add_parser("session-start").add_argument("spec", type=Path)
+    for name in ["session-advance", "session-report", "session-quota"]:
+        lab.add_parser(name).add_argument("session")
+    notebook = lab.add_parser("notebook")
+    notebook.add_argument("owner")
+    notebook.add_argument("--output", type=Path, required=True)
 
 
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     op = args.operation
+    if op == "session-fixture":
+        from jarvis.iris_lab_session import run_session_fixture
+
+        return run_session_fixture(store)
+    if op == "notebook":
+        from jarvis.research_notebook import export_notebook
+
+        return export_notebook(store, args.owner, args.output)
+    if op.startswith("session-"):
+        from jarvis.iris_lab_session import IrisLabSession, IrisLabSessionSpec
+
+        session = IrisLabSession(store)
+        if op == "session-start":
+            session_spec = IrisLabSessionSpec.model_validate(yaml.safe_load(args.spec.read_text()))
+            return {"session": session.create(session_spec), "status": "READY"}
+        if op == "session-report":
+            return session.report(args.session)
+        if op == "session-quota":
+            return session.refresh_quota(args.session, session.known_requests(args.session))
+        return session.advance(args.session)
     if op in {"fixture", "team-fixture"}:
         from jarvis.lab_fixture import run_improvement_fixture, run_lab_fixture
 

@@ -14,6 +14,9 @@ Family = Literal["entry", "cancel", "timing", "heuristic", "exit", "joint", "bas
 
 
 class IrisSettings(Record):
+    entry_trigger_bps: Annotated[float, Field(ge=0, le=1000)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     take_profit_bps: Annotated[float, Field(gt=0, le=1000)] | None = None
     stop_loss_bps: Annotated[float, Field(gt=0, le=1000)] | None = None
     heuristic_cancel_bps: Annotated[float, Field(ge=0, le=1000)] | None = None
@@ -121,6 +124,7 @@ class IrisExperiment(Record):
             raise ValueError("single-factor or explicitly joint experiment required")
         families = {
             "entry": {
+                "entry_trigger_bps",
                 "trading_cutoff_delta",
                 "entry_rule",
                 "hang_volume_ratio",
@@ -148,6 +152,12 @@ class IrisBaselineProof(Record):
     label: str
     raw: str
     raw_sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    selection_dates: tuple[date, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    parent_trading_dates: tuple[date, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class IrisQueueSpec(Record):

@@ -37,6 +37,7 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
     env, request = data["environment"], data["request"]
     root = Path(env["root"])
     sys.path.insert(0, str(root))
+    sys.path.insert(0, str(Path(env["evaluator"]).parent))
     paths = {
         str(root / "iris_agent.py"): env["agent_script_sha256"],
         env["evaluator"]: env["evaluator_sha256"],
@@ -71,21 +72,80 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
         ):
             raise ValueError("local baseline case lineage mismatch")
         job = case["job"]
+        selected_dates = proof.get("selection_dates")
+        parent_period = "-".join(job["period"])
         if (
             job["strategy"] != "hermes"
             or job["branch"] != env["branch"]
-            or "-".join(job["period"]) != request["period"]
+            or (not selected_dates and parent_period != request["period"])
             or Path(case["result_dir"]).resolve() != path.parent.resolve()
         ):
             raise ValueError("local baseline job or result directory mismatch")
+        expected_days = len(env["period"]["trading_dates"])
+        if selected_dates:
+            if (
+                selected_dates != env["period"]["trading_dates"]
+                or sorted(set(selected_dates)) != selected_dates
+                or any(
+                    not job["period"][0].replace("/", "-")
+                    <= d
+                    <= job["period"][1].replace("/", "-")
+                    for d in selected_dates
+                )
+            ):
+                raise ValueError("invalid explicit baseline calendar slice")
+            # The source job and its complete original calendar remain unchanged.
+            # Only the derived local analysis is sliced, never a remote rerun.
+            with path.open(newline="") as stream:
+                reader = csv.DictReader(stream)
+                fields = reader.fieldnames
+                all_rows = list(reader)
+            if fields is None:
+                raise ValueError("baseline ledger has no schema")
+            parent_dates = proof.get("parent_trading_dates")
+            if (
+                not parent_dates
+                or parent_dates != sorted(set(parent_dates))
+                or any(
+                    not job["period"][0].replace("/", "-")
+                    <= d
+                    <= job["period"][1].replace("/", "-")
+                    for d in parent_dates
+                )
+            ):
+                raise ValueError("explicit original calendar required")
+            expected_days = len(parent_dates)
+            if not set(selected_dates) <= set(parent_dates) or not {
+                r["txdate"] for r in all_rows if r["product"] not in {"begin", "end"}
+            } <= set(parent_dates):
+                raise ValueError("baseline slice or raw dates escape original calendar")
         completion = re.search(r"(\d+) days, (\d+) failed", case["result_output"])
-        if (
-            not completion
-            or int(completion[1]) != len(env["period"]["trading_dates"])
-            or int(completion[2])
-        ):
+        if not completion or int(completion[1]) != expected_days or int(completion[2]):
             raise ValueError("local baseline calendar incomplete")
-        return evaluate_result(evaluator, env, request, path, job, None)
+        if not selected_dates:
+            return evaluate_result(evaluator, env, request, path, job, None)
+        # Verify the complete raw ledger first under its own actual market days.
+        parent = evaluator.evaluate(path, trading_dates=parent_dates, expected_commit=job["sha"])
+        if parent.get("status") != "PASS":
+            raise ValueError("parent baseline ledger invalid")
+        derived = directory / "calendar-slice.csv"
+        assert fields is not None
+        with derived.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(
+                r
+                for r in all_rows
+                if r["txdate"] in selected_dates and r["product"] not in {"begin", "end"}
+            )
+        value = evaluate_result(evaluator, env, request, derived, job, None)
+        value["provenance"].update(
+            parent_raw_sha256=sha(path),
+            parent_period=parent_period,
+            selection_dates=selected_dates,
+            analysis_origin="explicit local calendar slice; original remote job retained",
+        )
+        return value
     iris = load_module(root / "iris_agent.py", "iris_agent")
     cfg = iris.load_config()  # Never returned, logged or passed to the parent.
     if operation == "quota":

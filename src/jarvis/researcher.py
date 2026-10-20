@@ -33,6 +33,9 @@ class AgentConfig(Record):
     provider: Literal["codex-cli"] = "codex-cli"
     executable: str = "codex"
     model: str | None = None
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     timeout_seconds: Annotated[int, Field(ge=5, le=300, strict=True)] = 120
     reserve_tokens: Annotated[int, Field(ge=1, le=200000, strict=True)] = 32768
     max_calls: Annotated[int, Field(ge=1, le=32, strict=True)] = 8

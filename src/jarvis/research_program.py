@@ -14,6 +14,7 @@ from jarvis.iris import IrisTransport, LocalIrisTransport, setting_capabilities
 from jarvis.iris_contracts import IrisExperiment, IrisQueueSpec
 from jarvis.iris_design import design_capabilities
 from jarvis.providers import CodexProvider, ResearchProvider
+from jarvis.research_acceptance import ResearchAcceptance, assess_candidate
 from jarvis.research_queue import IrisResearchQueue, queue_tasks, verify_queue, visible_results
 from jarvis.research_roles import (
     DirectionBatch,
@@ -36,6 +37,9 @@ class ResearchProgramSpec(Record):
     experiments_per_epoch: int = Field(default=3, ge=1, le=3, strict=True)
     execution_budget: Budget | None = None
     support_ref: str | None = None
+    acceptance: ResearchAcceptance | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     max_direction_batches: int = Field(default=3, ge=1, le=8, strict=True)
     experiments_per_batch: int = Field(default=3, ge=1, le=3, strict=True)
     llm_token_budget: int = Field(default=300000, ge=65536, le=1000000, strict=True)
@@ -56,6 +60,11 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
         "goal": spec.queue.goal,
         "primary_metric": "entry_only_pl",
         "risk": "Report all; no hidden penalty or metric change",
+        **(
+            {"selection_constraints": spec.acceptance.model_dump(mode="json")}
+            if spec.acceptance
+            else {}
+        ),
         "directions": spec.directions,
         "batch_constraints": {
             "experiments_maximum": spec.experiments_per_batch,
@@ -523,6 +532,17 @@ def program_report(store: Store, program: str) -> dict[str, Any]:
         for r in valid
         if baseline and r["experiment"]["family"] != "baseline"
     ]
+    assessments = [
+        {"result_ref": r["result_ref"], **assess_candidate(r["result"], baseline, spec.acceptance)}
+        for r in valid
+        if baseline and spec.acceptance and r["experiment"]["family"] != "baseline"
+    ]
+    qualified_refs = {a["result_ref"] for a in assessments if a["qualified"]}
+    qualified = max(
+        (r for r in valid if r["result_ref"] in qualified_refs),
+        key=lambda r: r["result"]["entry_only_pl"],
+        default=None,
+    )
     usage_rows = [store.resource_totals(p) for p in [program, *links]]
     return {
         "kind": "ResearchProgramReport",
@@ -533,6 +553,15 @@ def program_report(store: Store, program: str) -> dict[str, Any]:
         "risk_policy": spec.queue.risk_policy,
         "scope": spec.queue.environment.period.exposure,
         "best_development_candidate": best,
+        **(
+            {
+                "selection_constraints": spec.acceptance.model_dump(mode="json"),
+                "candidate_assessments": assessments,
+                "best_qualified_candidate": qualified,
+            }
+            if spec.acceptance
+            else {}
+        ),
         "experiments": results,
         "baseline_comparisons": comparisons,
         "queue_id": qid,

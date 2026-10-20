@@ -498,7 +498,15 @@ class IrisResearchQueue:
         validate_iris_result(result, request, spec)
         if (
             result["status"] != "SUCCEEDED"
-            or result["provenance"]["raw_sha256"] != proof.raw_sha256
+            or result["provenance"].get(
+                "parent_raw_sha256" if proof.selection_dates else "raw_sha256"
+            )
+            != proof.raw_sha256
+            or (
+                proof.selection_dates
+                and result["provenance"].get("selection_dates")
+                != [str(d) for d in proof.selection_dates]
+            )
         ):
             raise IntegrityError("local baseline verification failed")
         receipt = {
@@ -786,7 +794,19 @@ def verify_queue(store: Store, queue_id: str) -> dict[str, Any]:
                         or case["status"] != "completed"
                         or case["job"]["sha"] != result["commit"]
                         or "sha256:" + case["sha256"] != spec.environment.template_sha256
-                        or result["provenance"]["raw_sha256"] != proof["raw_sha256"]
+                        or result["provenance"].get(
+                            "parent_raw_sha256" if proof.get("selection_dates") else "raw_sha256"
+                        )
+                        != proof["raw_sha256"]
+                        or (
+                            proof.get("selection_dates")
+                            and (
+                                result["provenance"].get("selection_dates")
+                                != proof["selection_dates"]
+                                or proof["selection_dates"]
+                                != [str(d) for d in spec.environment.period.trading_dates]
+                            )
+                        )
                         or Cost.model_validate(receipt["cost"]).tool_calls != 0
                     ):
                         raise IntegrityError("local baseline provenance changed")

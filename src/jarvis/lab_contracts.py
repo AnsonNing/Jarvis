@@ -63,6 +63,18 @@ class SourceDocument(Record):
     license_note: str = Field(max_length=500)
 
 
+class PublicSourceQuery(Record):
+    backend: Literal["crossref", "github"]
+    question: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class PublicSourcePlan(Record):
+    context_id: str
+    queries: tuple[PublicSourceQuery, ...] = Field(min_length=1, max_length=3)
+    limitations: str = Field(min_length=1, max_length=1500)
+
+
 class HumanInput(Record):
     kind: Literal["HumanResearchInput"] = "HumanResearchInput"
     category: Literal["idea", "background", "priority"]
