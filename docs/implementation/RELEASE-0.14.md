@@ -10,7 +10,7 @@ existing experiment/admission/evaluator boundaries remain in place.
 
 ## Executed engineering acceptance
 
-The final complete local regression passed **307 tests in 384.15 seconds**
+The initial complete local regression at `3678a77` passed **307 tests in 384.15 seconds**
 (6 minutes 24 seconds), with no skips. The installed package is **0.14.0** and
 dependency checks pass. Ruff lint/format and
 mypy pass (122 formatted Python files and 92 typed source files). The 29 new
@@ -102,3 +102,20 @@ Linux regression and a separate macOS isolated-skill job are part of CI. A platf
 without usable isolation skips generated-execution tests explicitly; it must not
 report a successful full skill-construction fixture. An unavailable Builder yields
 INCOMPLETE, with retained observations and no claimed successor adoption.
+
+
+## Framework Python compatibility follow-up
+
+The first hosted macOS run found that framework CPython's `bin/python` is a
+launcher which uses `posix_spawn` to execute `Python.app`. The deny-by-default
+profile correctly blocked that second executable and the fixture returned
+INCOMPLETE. Hosted targeted tests explicitly reported four isolation skips, so
+neither their success nor executable presence was accepted as full P3 validation.
+
+The sandbox now selects the actual framework interpreter directly when present,
+otherwise the normal resolved interpreter. Its binary checksum is recorded.
+General process-fork/spawn permission remains denied. A planning regression checks
+that selection and the unchanged boundary; **30 focused tests passed in 9.06s**
+locally, including actual isolation and the full workflow. Hosted acceptance still
+requires a successful complete fixture, rather than treating unavailable isolation
+as a passing skill-construction run.

@@ -532,3 +532,27 @@ def test_csv_snapshot_hashes_the_captured_bytes_even_if_source_changes(tmp_path,
     assert snapshot.source_checksum == raw_digest(raw)
     assert str(snapshot.rows[0].pl) == "1.25"
     assert "999" in path.read_text()
+
+
+def test_macos_framework_uses_real_interpreter_without_allowing_process_fork(tmp_path, monkeypatch):
+    import sys
+
+    prefix = tmp_path / "Python.framework" / "Versions" / "3.12"
+    binary = prefix / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    launcher = prefix / "bin" / "python3.12"
+    binary.parent.mkdir(parents=True)
+    launcher.parent.mkdir()
+    binary.write_text("declared test interpreter")
+    launcher.write_text("declared test launcher")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(launcher))
+    monkeypatch.setattr(sys, "base_prefix", str(prefix))
+    monkeypatch.setattr("jarvis.skill_sandbox.shutil.which", lambda _: "/usr/bin/sandbox-exec")
+    sandbox = SkillSandbox()
+    assert sandbox.interpreter() == binary
+    command = sandbox.command(
+        tmp_path / "implementation.py", tmp_path / "input.json", tmp_path / "output", "run"
+    )
+    assert command[3] == str(binary)
+    assert "allow process-fork" not in command[2]
+    assert "(allow process-exec (literal " in command[2]

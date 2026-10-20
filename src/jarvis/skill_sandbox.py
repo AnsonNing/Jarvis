@@ -19,6 +19,23 @@ class SandboxUnavailable(AdmissionError):
 
 
 class SkillSandbox:
+    def interpreter(self) -> Path:
+        python = Path(sys.executable).resolve()
+        if sys.platform == "darwin":
+            # Framework bin/python is a launcher which spawns Python.app. Execute
+            # the actual interpreter directly; do not grant general spawn rights.
+            framework = (
+                Path(sys.base_prefix).resolve()
+                / "Resources"
+                / "Python.app"
+                / "Contents"
+                / "MacOS"
+                / "Python"
+            )
+            if framework.is_file():
+                python = framework.resolve()
+        return python
+
     def probe(self, directory: Path) -> dict[str, Any]:
         """Execute trusted sentinels before requesting any generated implementation."""
         directory.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -72,6 +89,7 @@ class SkillSandbox:
             "available": bool(executable),
             "executable_hash": file_digest(Path(executable)) if executable else None,
             "worker_hash": file_digest(Path(__file__).with_name("skill_worker.py")),
+            "interpreter_hash": file_digest(self.interpreter()),
             "network": "denied",
             "credentials": "not mounted or inherited",
             "limits": {
@@ -84,7 +102,7 @@ class SkillSandbox:
         }
 
     def command(self, source: Path, inputs: Path, output: Path, mode: str) -> list[str]:
-        python = Path(sys.executable).resolve()
+        python = self.interpreter()
         prefix = Path(sys.base_prefix).resolve()
         worker = Path(__file__).with_name("skill_worker.py").resolve()
         source, inputs, output = source.resolve(), inputs.resolve(), output.resolve()

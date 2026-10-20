@@ -2,13 +2,15 @@
 
 Date: 2026-10-21. Release: 0.14.0. Mechanism research adds complete owner intent, a question/hypothesis tree, typed evidence-seeking actions, read-only diagnostics, versioned skills and a separate isolated Builder. Current engineering acceptance uses artificial data and scripted providers. Historical real research remains paused; no automatic resumption is enabled.
 
-Final 0.14 acceptance: **307 tests passed in 384.15s**, 29 targeted feature tests
+Initial 0.14 acceptance at `3678a77`: **307 tests passed in 384.15s**, 29 targeted feature tests
 passed, three public skill self-tests passed, Ruff lint/format passed for 122
 Python files, and mypy passed for 92 source files. The full new workflow reached
 VERIFIED with eight actions across two versions, 21 scripted role calls, actual
 isolated Python and candidate commit, zero real provider/Iris calls, and zero
 pending resources. Existing Critic, Dream feedback and Research Lab session CLI
-regressions also closed with VERIFIED audits. See [Release 0.14](RELEASE-0.14.md).
+regressions also closed with VERIFIED audits. The hosted macOS framework-launcher
+follow-up adds a direct-interpreter selection regression; 30 focused tests pass
+without granting process-fork permission. See [Release 0.14](RELEASE-0.14.md).
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
