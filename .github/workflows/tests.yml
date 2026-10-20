@@ -17,9 +17,9 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-lock.txt
       - run: python -m pip install --no-deps -e .
-      - run: ruff check src tests
-      - run: ruff format --check src tests
-      - run: mypy src/jarvis
+      - run: ruff check src tests scripts/iris_mission_supervisor.py
+      - run: ruff format --check src tests scripts/iris_mission_supervisor.py
+      - run: mypy src/jarvis scripts/iris_mission_supervisor.py
       - run: pytest -q
       - run: jarvis task validate examples/research_task.example.yaml
       - run: jarvis --store /tmp/jarvis-ci campaign start examples/research_task.example.yaml

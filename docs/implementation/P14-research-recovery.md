@@ -73,3 +73,31 @@ private ignored artifacts. Recurring supervision is an explicit deployment actio
 separate from the library and fixtures. Dream/capability promotion still requires
 independent utility/effectiveness protocols. Continuation alone is not an improved
 research policy.
+
+## Read-only transport supervision
+
+`scripts/iris_mission_supervisor.py` is a separately versioned operating harness.
+It does not edit or replace the active library. Its source hash and artifact are
+recorded when attached. A single supervisor lock prevents duplicate supervisors;
+the saved process command and mission identity prevent duplicate runners.
+
+Only a classified collection-time SlackError on a durably known SUBMITTED request
+can enter automatic read recovery. Any unfinished provider or other operation,
+unknown submission, owner pause/cancel, runtime drift or unexpected failure stops
+that path. The existing queue collects the same request ID. A known read outcome
+and explicit lineage record are required before affected ancestor states resume.
+Original failure events, reservations and costs remain. No candidate is resubmitted.
+
+The supervisor also resumes invocation limits with the same saved mission/store/
+arguments. Unclassified failures remain attention states for independent diagnosis.
+This is controlled infrastructure recovery, not agent-discovered policy improvement.
+
+```sh
+python scripts/iris_mission_supervisor.py --process PRIVATE_PROCESS.json --state PRIVATE_SUPERVISOR_STATE.json
+pytest -q tests/test_iris_read_supervisor.py
+```
+
+The three synthetic controls passed: same-request read recovery with unchanged
+submission/provider-call counts, preserved unknown provider reservations, and an
+owner pause that cannot be cleared. The kernel identity remains unchanged while
+this harness is tested and deployed.
