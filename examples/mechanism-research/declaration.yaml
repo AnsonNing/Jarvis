@@ -1,0 +1,33 @@
+contract:
+  schema_version: 1
+  kind: MechanismResearchContract
+  task_id: mechanism-example
+  instruction: Explain whether the PL change is consistent with selection composition,
+    changed outcomes of common records, or unresolved missing-record effects. Inspect
+    the evidence first and propose a discriminating follow-up only when justified.
+  objective: Explain artificial PL differences before optimization
+  focus: Selection and observed execution paths
+  evaluator_id: pl-v1
+  dataset_id: fixture-development
+  exposure: synthetic
+  candidate_freedom:
+  - Read-only inventory and diagnostics
+  - Discuss competing hypotheses
+  - Propose controlled adapter-supported experiments
+  acceptance: {}
+  constraints:
+  - Keep model, evaluator and data identities fixed
+  - Do not infer unseen opportunities or causal outcomes
+  origin: declared_fixture
+  allow_observed_experiments: false
+  allow_skill_building: false
+baseline_evidence:
+- kind: DeclaredFixtureBaseline
+  origin: declared_fixture
+  model: model-fixed
+  description: Artificial engineering input; no market data
+inputs:
+- path: baseline.json
+  sha256: sha256:a2ec6ceae8f8c5cfa16b9be259e64a41b94e43e67d6d33da30b7adce2f17ca04
+- path: candidate.json
+  sha256: sha256:3b451bf568a1b1b1d4d79f5c822c5789ab64ff86564652c610581b414b8550ec

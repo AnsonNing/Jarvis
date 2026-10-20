@@ -151,6 +151,16 @@ class ResearchLab:
             "task_id": spec.task_id,
             "family": spec.family,
             "goal": spec.program.queue.goal,
+            **(
+                {
+                    "research_contract_ref": spec.program.research_contract_ref,
+                    "research_contract": self.store.artifacts.get(
+                        spec.program.research_contract_ref
+                    ),
+                }
+                if spec.program.research_contract_ref
+                else {}
+            ),
             "method": spec.method.model_dump(mode="json"),
             "visible_evidence_ids": [*spec.source_refs, *spec.human_refs],
             "evidence": [

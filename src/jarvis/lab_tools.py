@@ -117,13 +117,20 @@ class GitHubImplementationSearch:
 
 
 def run_tool(
-    store: Store, owner: str, key: str, request: dict[str, Any], function: Callable[[], Any]
+    store: Store,
+    owner: str,
+    key: str,
+    request: dict[str, Any],
+    function: Callable[[], Any],
+    *,
+    reserved_cost: Cost | None = None,
 ) -> Any:
     envelope = {
         "kind": "LabTool",
         "key": key,
         "request": request,
         "world_id": store.manifest(owner)["world_id"],
+        **({"reserved_cost": reserved_cost.model_dump()} if reserved_cost else {}),
     }
     with store.campaign_lock(owner):
         matches = [j for j in store.jobs(owner) if j["request_ref"] == digest(envelope)]
@@ -131,7 +138,9 @@ def run_tool(
             job = matches[0]
         else:
             jid = store.reserve(
-                owner, envelope, Cost(actions=1, tool_calls=1, compute_units=1, wall_seconds=20)
+                owner,
+                envelope,
+                reserved_cost or Cost(actions=1, tool_calls=1, compute_units=1, wall_seconds=20),
             )
             job = next(j for j in store.jobs(owner) if j["id"] == jid)
         receipt = store.read_receipt(job["id"])

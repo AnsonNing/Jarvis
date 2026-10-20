@@ -1,0 +1,16 @@
+kind: BuiltinSkillPackage
+name: trade_attribution
+version: 1.0.0
+protocol: paired-attribution-v1
+domain: artificial
+applicability: Compatible declared snapshots; descriptive evidence only
+files:
+  CARD.md: sha256:79075afddd2924db8138d5902f849252b6c1a0006f6c1b6971958b6bde6e0619
+  implementation.py: sha256:85ae5eac8c4f483a6ce9f41b449dea6481fb2956e7fab69da800356dccb845a4
+  test_skill.py: sha256:79d51d54d5e5707a204b186e49b797ef73cba449196d5f51cfa12131d4794814
+dependencies:
+- jarvis-research>=0.14,<0.15
+permissions:
+- read_input_snapshot
+- write_private_output
+origin: human_provided

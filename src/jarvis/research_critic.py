@@ -102,6 +102,8 @@ def _call(
     store = engine.store
     manifest = store.manifest(program)
     spec = ResearchProgramSpec.model_validate(manifest["spec"])
+    if spec.bounded_role_repairs:
+        return _repaired_call(engine, program, key, role, context, schema)
     prior = next(
         (p for p in _events(store, program, "PROGRAM_ROLE_REQUESTED") if p["key"] == key), None
     )
@@ -136,6 +138,113 @@ def _call(
         role_budget=True,
         guidance=guidance,
     )
+
+
+def _repaired_call(
+    engine: "ResearchProgram",
+    program: str,
+    key: str,
+    role: str,
+    context: dict[str, Any],
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    """New programs opt in; known invalid answers retain original contexts and costs."""
+    from copy import deepcopy
+
+    from jarvis.research_program import ResearchProgramSpec
+
+    store = engine.store
+    manifest = store.manifest(program)
+    spec = ResearchProgramSpec.model_validate(manifest["spec"])
+    config = spec.critic if role == "critic" else spec.agent
+    assert config is not None
+    provider = (engine.critic_provider_factory if role == "critic" else engine.provider_factory)(
+        config
+    )
+    identity = manifest["critic_provider"] if role == "critic" else manifest["provider"]
+    if provider.identity() != identity:
+        raise IntegrityError("declared role provider changed")
+    correction = None
+    guidance = None
+    if spec.support_ref:
+        from jarvis.lab_contracts import ResearchSupport
+
+        method = ResearchSupport.model_validate(store.artifacts.get(spec.support_ref)).method
+        guidance = method.critic_guidance if role == "critic" else method.director_guidance
+    for attempt in range(3):
+        attempt_key = key if not attempt else key + f":repair:{attempt}"
+        prior = next(
+            (
+                p
+                for p in _events(store, program, "PROGRAM_ROLE_REQUESTED")
+                if p["key"] == attempt_key
+            ),
+            None,
+        )
+        if prior is None:
+            frozen = {**context, **({"correction": correction} if correction else {})}
+            output = deepcopy(schema)
+            output["properties"]["context_id"]["enum"] = [digest(frozen)]
+            prior = {
+                "key": attempt_key,
+                "role": role,
+                "context_ref": store.artifacts.put(frozen),
+                "schema_ref": store.artifacts.put(output),
+            }
+            store.append(program, "PROGRAM_ROLE_REQUESTED", prior)
+        frozen = store.artifacts.get(prior["context_ref"])
+        if attempt == 0:
+            context = frozen
+        rejected = next(
+            (
+                p
+                for p in _events(store, program, "PROGRAM_ROLE_REJECTED")
+                if p["key"] == attempt_key
+            ),
+            None,
+        )
+        if rejected is None:
+            # Unknown completion never enters the known-answer repair path.
+            response = RoleCaller(store, provider, config).call(
+                program,
+                role,
+                frozen,
+                store.artifacts.get(prior["schema_ref"]),
+                role_budget=True,
+                guidance=guidance,
+            )
+            try:
+                if role == "critic":
+                    validate_review(CriticReview.model_validate(response["answer"]), frozen)
+                else:
+                    batch = DirectionBatch.model_validate(response["answer"])
+                    if (
+                        batch.context_id != digest(frozen)
+                        or len(batch.experiments) > spec.experiments_per_batch
+                        or any(
+                            e.origin != "agent_proposed"
+                            or e.family == "baseline"
+                            or not set(e.evidence_refs) <= set(frozen["visible_evidence_ids"])
+                            for e in batch.experiments
+                        )
+                    ):
+                        raise ValueError("direction escaped frozen context or admission envelope")
+            except (ValueError, AdmissionError) as exc:
+                rejected = {
+                    **prior,
+                    "answer_ref": store.artifacts.put(response["answer"]),
+                    "receipt_ref": response["receipt_ref"],
+                    "reason": str(exc)[:1500],
+                }
+                store.append(program, "PROGRAM_ROLE_REJECTED", rejected)
+            else:
+                return {**response, "effective_key": attempt_key}
+        correction = {
+            "rejected_answer_ref": rejected["answer_ref"],
+            "reason": rejected["reason"],
+            "instruction": "Repair only the known invalid response. Each non-null setting counts as an intervention: omit unchanged baseline values; two or three interventions require joint. Preserve evidence, goals, model, evaluator and permissions. Original cost remains charged.",
+        }
+    raise AdmissionError("known invalid research role exceeded two corrective attempts")
 
 
 def _context(store: Store, program: str, qid: str, batch_ref: str, phase: str) -> dict[str, Any]:
@@ -214,6 +323,7 @@ def _review(
     )
     response = _call(engine, program, key, "critic", context, schema)
     # On recovery the frozen request, not a newly assembled context, owns identity.
+    key = response.get("effective_key", key)
     frozen = next(p for p in _events(store, program, "PROGRAM_ROLE_REQUESTED") if p["key"] == key)
     context = store.artifacts.get(frozen["context_ref"])
     review = CriticReview.model_validate(response["answer"])
@@ -307,7 +417,7 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
         frozen = next(
             p
             for p in _events(store, program, "PROGRAM_ROLE_REQUESTED")
-            if p["key"] == f"direction:{qid}"
+            if p["key"] == response.get("effective_key", f"direction:{qid}")
         )
         context = store.artifacts.get(frozen["context_ref"])
         if (
@@ -327,6 +437,7 @@ def _advance(engine: "ResearchProgram", program: str) -> dict[str, Any]:
             "visible_refs": context["visible_evidence_ids"],
             "receipt_ref": response["receipt_ref"],
             "batch_ref": store.artifacts.put(batch),
+            **({"role_key": response["effective_key"]} if "effective_key" in response else {}),
         }
         store.append(program, "DIRECTION_BATCH_PREPARED", prepared)
         return {**answer, "status": "AWAITING_PROPOSAL_CRITIQUE"}
@@ -540,7 +651,7 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
                 raise IntegrityError("independent role lacks its frozen provider/context")
             completed[p["receipt_ref"]] = p
         elif kind == "DIRECTION_BATCH_PREPARED":
-            context = frozen[f"direction:{p['queue_id']}"]["context"]
+            context = frozen[p.get("role_key", f"direction:{p['queue_id']}")]["context"]
             batch = DirectionBatch.model_validate(store.artifacts.get(p["batch_ref"]))
             receipt = completed.get(p["receipt_ref"])
             if (

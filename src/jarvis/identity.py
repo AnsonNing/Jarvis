@@ -20,6 +20,11 @@ def digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical(value)).hexdigest()
 
 
+def raw_digest(value: bytes) -> str:
+    """Hash the same captured bytes that will be parsed; distinct from JSON identity."""
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
 def file_digest(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as stream:

@@ -72,6 +72,9 @@ def parser() -> argparse.ArgumentParser:
     from jarvis.lab_cli import add_commands as add_lab_commands
 
     add_lab_commands(commands)
+    from jarvis.mechanism_cli import add_commands as add_workflow_commands
+
+    add_workflow_commands(commands)
     task = commands.add_parser("task").add_subparsers(dest="operation", required=True)
     task.add_parser("validate").add_argument("path", type=Path)
     schema = commands.add_parser("schema")
@@ -143,6 +146,18 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.command == "workflow":
+        from jarvis.mechanism_cli import preflight, sandbox_check
+        from jarvis.mechanism_cli import run as run_workflow
+        from jarvis.storage import Store
+
+        if args.operation == "preflight":
+            emit(preflight(args.declaration))
+        elif args.operation == "sandbox-check":
+            emit(sandbox_check())
+        else:
+            emit(run_workflow(Store(args.store), args))
+        return
     if args.command == "lab":
         from jarvis.lab_cli import run as run_lab
         from jarvis.storage import Store
@@ -184,10 +199,12 @@ def run(args: argparse.Namespace) -> None:
             lab_contracts,
             lab_evolution,
             lab_memory,
+            mechanism_research,
             new_research,
             policy,
             pool,
             research_acceptance,
+            research_contract,
             research_critic,
             research_program,
             research_roles,
@@ -195,6 +212,7 @@ def run(args: argparse.Namespace) -> None:
             reviewed_dream,
             search_space,
             suite,
+            trading_diagnostics,
         )
 
         args.output.mkdir(parents=True, exist_ok=True)
@@ -222,6 +240,9 @@ def run(args: argparse.Namespace) -> None:
             lab_contracts,
             lab_evolution,
             lab_memory,
+            mechanism_research,
+            research_contract,
+            trading_diagnostics,
             research_critic,
             research_program,
             research_acceptance,

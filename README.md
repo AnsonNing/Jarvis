@@ -2,9 +2,11 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.13 includes selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. **Version 0.14 adds mechanism research:** a complete owner contract, competing hypotheses, typed inspection/diagnosis/consultation/experiment/build/stop actions, independent Critic review, reusable diagnostic skills and a separate isolated Skill Builder. The Director can seek evidence before submitting another backtest. Newly validated skills require a versioned successor session; fidelity does not imply research utility. The [mechanism research guide](docs/implementation/P15-mechanism-research.md) explains the pipeline, data requirements and boundaries. This release starts no real Hermes research or background automation.
 
-Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Research Lab verifies scoped reuse and a closed numerical diagnostic capability on artificial tasks. General capability acquisition, arbitrary generated-code execution, model-weight updates and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
+Version 0.13 introduced selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+
+Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Research Lab verifies scoped reuse and a closed numerical diagnostic capability on artificial tasks. Generated Python is admitted only for the fixed paired-attribution protocol behind an available OS sandbox and independent fidelity tests. General capability acquisition, new trusted protocols, model-weight updates and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
 The [Iris research guide](docs/implementation/P6-iris-and-hermes-dream.md) describes
 model acceptance, baseline reuse, submission budgets, multi-round research and
@@ -21,6 +23,11 @@ jarvis --store .jarvis/reviewed-dream-fixture research dream-loop-fixture
 jarvis --store .jarvis/lab-fixture lab fixture
 # Sequential integration/development, shared quota, retrospective proposals and notebook:
 jarvis --store .jarvis/session-fixture lab session-fixture
+# Store-free mechanism-research declaration checks:
+jarvis workflow preflight examples/mechanism-research/declaration.yaml
+# Actual isolated skill construction and successor use, with scripted providers:
+jarvis workflow sandbox-check
+jarvis --store .jarvis/mechanism-fixture workflow fixture
 # Real LLM research on artificial objectives; still zero remote Iris submissions:
 jarvis --store .jarvis/strategy-llm-fixture research fixture --agent codex
 jarvis --store .jarvis/policy-llm-fixture hermes-dream fixture --agent codex

@@ -1,5 +1,6 @@
 """Repair known invalid structured answers without repeating unknown operations."""
 
+from collections.abc import Callable
 from typing import Any
 
 from jarvis.contracts import AdmissionError, IntegrityError, Record
@@ -22,6 +23,7 @@ def evidence_role(
     guidance: str,
     *,
     max_repairs: int = 2,
+    validate: Callable[[Record, dict[str, Any]], None] | None = None,
 ) -> Record:
     def events(kind: str) -> list[dict[str, Any]]:
         return [e["payload"] for e in store.events(owner) if e["event_type"] == kind]
@@ -31,7 +33,10 @@ def evidence_role(
         attempt_key = key if attempt == 0 else f"{key}:repair:{attempt}"
         known = next((p for p in events("LAB_ROLE_RECORDED") if p["key"] == attempt_key), None)
         if known:
-            return model.model_validate(store.artifacts.get(known["answer_ref"]))
+            answer = model.model_validate(store.artifacts.get(known["answer_ref"]))
+            if validate:
+                validate(answer, store.artifacts.get(known["context_ref"]))
+            return answer
         frozen = {**context, **({"correction": correction} if correction else {})}
         prior = next((p for p in events("LAB_ROLE_REQUESTED") if p["key"] == attempt_key), None)
         if prior is None:
@@ -78,6 +83,8 @@ def evidence_role(
                     refs.update(getattr(answer, "counter_evidence_refs", ()))
                     if not refs <= set(frozen["visible_evidence_ids"]):
                         raise ValueError("references must be exact allowed evidence IDs")
+                if validate:
+                    validate(answer, frozen)
             except ValueError as exc:
                 rejected = {
                     **prior,

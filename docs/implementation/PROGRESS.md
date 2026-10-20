@@ -1,9 +1,18 @@
 # Verified implementation progress
 
-Date: 2026-10-20. Release: 0.11.0. Research Lab now adds on-demand specialists, source discovery, human-input boards and scoped experience around the existing Research Agent + Critic. Research-method, closed diagnostic-capability and exploration-policy changes each pass prospective same-budget comparisons, independent validation, actual continuation and new-history feedback on artificial tasks. Real Hermes research remains unstarted.
+Date: 2026-10-21. Release: 0.14.0. Mechanism research adds complete owner intent, a question/hypothesis tree, typed evidence-seeking actions, read-only diagnostics, versioned skills and a separate isolated Builder. Current engineering acceptance uses artificial data and scripted providers. Historical real research remains paused; no automatic resumption is enabled.
+
+Final 0.14 acceptance: **307 tests passed in 384.15s**, 29 targeted feature tests
+passed, three public skill self-tests passed, Ruff lint/format passed for 122
+Python files, and mypy passed for 92 source files. The full new workflow reached
+VERIFIED with eight actions across two versions, 21 scripted role calls, actual
+isolated Python and candidate commit, zero real provider/Iris calls, and zero
+pending resources. Existing Critic, Dream feedback and Research Lab session CLI
+regressions also closed with VERIFIED audits. See [Release 0.14](RELEASE-0.14.md).
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
+| P15 mechanism research and skills | VERIFIED_WITH_LIMITATIONS | Complete owner contract, typed question/action loop, strict row diagnostics, checksum-pinned packages, private Builder and cross-session adoption; no real provider/backend work or causal/utility claim |
 | P14 recovery and continued missions | VERIFIED_WITH_LIMITATIONS | Exact-reference correction, explicit historical recovery, decision-time Critic controls, multi-session controller and failure-finalized runner; known/unknown-call and continuation controls passed. Real outcomes remain private. |
 | P13 selected entry sessions | VERIFIED_WITH_LIMITATIONS | Selected-package and calendar-subset baseline admission, side-specific trigger, pinned role effort, explicit PR/MDD feasibility, sequential reviewed session and private notebook; complete artificial session passed. Real outcomes remain private and do not establish independent Dream effectiveness. |
 | P0.1 contracts/package | VERIFIED | Strict records, finite canonical JSON, generated schemas, installable CLI |
@@ -13,8 +22,8 @@ Date: 2026-10-20. Release: 0.11.0. Research Lab now adds on-demand specialists, 
 | P0.5 jobs/budgets | VERIFIED_WITH_LIMITATIONS | Atomic reservations, receipt adoption, uncertain-job stop; sequential local coordinator, no remote leases |
 | P0.6–P0.9 fixture/evaluation/tree/Q0 | VERIFIED_WITH_LIMITATIONS | Four fixture worlds, fixed evaluator, formal freeze, causal tree, adaptive Q0; extended fixture matrix remains |
 | P1 LLM research loop | VERIFIED_WITH_LIMITATIONS | Real structured Codex provider; autonomous hypothesis/design/analysis/revision; four new-baseline real Hermes rounds CLOSED plus prior legacy acceptance; token/repair/recovery/replay verified |
-| P1 generated candidate builder | NOT_STARTED | Arbitrary generated-code execution awaits a separately verified isolation boundary |
-| P2 memory/capability RSI | VERIFIED_WITH_LIMITATIONS | Scoped experience retains actual observations/counter-evidence and provisional interpretations; compatible new-task reuse and negative control pass. One closed diagnostic has metered fidelity, independent utility and subsequent use; general capability acquisition and arbitrary generated code remain unimplemented |
+| P1 generated candidate builder | VERIFIED_WITH_LIMITATIONS | Separate structured Builder, real OS-isolated Python, independent fixed paired-attribution fidelity, retained local candidate commit and versioned successor use; arbitrary new protocols and research utility remain gated |
+| P2 memory/capability RSI | VERIFIED_WITH_LIMITATIONS | Scoped experience retains actual observations/counter-evidence and provisional interpretations; compatible new-task reuse and negative control pass. One closed diagnostic has metered fidelity, independent utility and subsequent use; general capability acquisition remains gated; isolated fixed-protocol generated skills are covered by P15 |
 | P3 branching corpus | VERIFIED_WITH_LIMITATIONS | Twelve-tree, six-family corpus, real sibling execution, compatibility/splits, causal verification and coverage CLI; L2 transfer A/B remains unimplemented |
 | P4 synthetic Dream-RSI | VERIFIED_WITH_LIMITATIONS | Real developer and fixture control each completed three rounds plus fresh canary; exact replay, one finalist, independent/fresh gates, versioning and measured rollback. Final active policy Q0; no general efficacy claim |
 | P5 Hermes integration | VERIFIED_WITH_LIMITATIONS | Both new frozen baselines admitted, portable predictions agree exactly, four policies reproduced; four real LLM rounds CLOSED, causal review and offline replay verified. Real postfill quote paths and event acknowledgement backtester remain unavailable |

@@ -1,0 +1,16 @@
+kind: BuiltinSkillPackage
+name: inventory
+version: 1.0.0
+protocol: inventory-v1
+domain: artificial
+applicability: Compatible declared snapshots; descriptive evidence only
+files:
+  CARD.md: sha256:e9c6b774a636da5404b82fd5529c65000de7f0d3a1d4414f153d3911b8734571
+  implementation.py: sha256:d966299383f5e570abe9fc4761252422e591ebbfab1a8efafb1fc1c4c7a2efd1
+  test_skill.py: sha256:b18767823fdbcf26c3c82e29619a1a31311088bb97fe9faab16a6e70916c46ff
+dependencies:
+- jarvis-research>=0.14,<0.15
+permissions:
+- read_input_snapshot
+- write_private_output
+origin: human_provided

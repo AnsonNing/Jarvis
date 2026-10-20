@@ -37,6 +37,8 @@ class ResearchProgramSpec(Record):
     experiments_per_epoch: int = Field(default=3, ge=1, le=3, strict=True)
     execution_budget: Budget | None = None
     support_ref: str | None = None
+    research_contract_ref: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    bounded_role_repairs: bool = Field(default=False, exclude_if=lambda value: value is False)
     acceptance: ResearchAcceptance | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -60,6 +62,14 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
     return {
         "role": "direction",
         "goal": spec.queue.goal,
+        **(
+            {
+                "research_contract_ref": spec.research_contract_ref,
+                "research_contract": store.artifacts.get(spec.research_contract_ref),
+            }
+            if spec.research_contract_ref
+            else {}
+        ),
         "primary_metric": "entry_only_pl",
         "risk": "Report all; no hidden penalty or metric change",
         **(

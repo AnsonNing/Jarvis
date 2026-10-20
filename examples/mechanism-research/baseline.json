@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "kind": "DiagnosticSnapshot",
+  "domain": "artificial",
+  "model_id": "model-fixed",
+  "evaluator_id": "pl-v1",
+  "dataset_id": "fixture-development",
+  "period_id": "period-a",
+  "policy_id": "baseline",
+  "entity_kind": "fill",
+  "stable_keyspace": "declared-entity-v1",
+  "id_provenance": "Declared synthetic stable keys",
+  "pl_units": "artificial units",
+  "exposure": "synthetic",
+  "origin": "declared_fixture",
+  "source_checksum": "sha256:04aff576aeeef19379e4f602c04e08e5f7c7a15507da385985489b7feafd68cf",
+  "rows": [
+    {
+      "schema_version": 1,
+      "entity_id": "shared",
+      "pl": "10",
+      "score": 0.2,
+      "path": []
+    },
+    {
+      "schema_version": 1,
+      "entity_id": "removed",
+      "pl": "2",
+      "score": null,
+      "path": []
+    },
+    {
+      "schema_version": 1,
+      "entity_id": null,
+      "pl": "3",
+      "score": null,
+      "path": []
+    }
+  ]
+}

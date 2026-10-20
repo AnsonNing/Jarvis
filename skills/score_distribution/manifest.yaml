@@ -1,0 +1,16 @@
+kind: BuiltinSkillPackage
+name: score_distribution
+version: 1.0.0
+protocol: score-distribution-v1
+domain: artificial
+applicability: Compatible declared snapshots; descriptive evidence only
+files:
+  CARD.md: sha256:9ce8d774bd08b547c515b9b7ba78592388a36569c5e0a22c5d2b2d523fc6e8f6
+  implementation.py: sha256:97c8cde30021c092009ea33767ef8d3ff729b2d5c9fc75716b3399768c690414
+  test_skill.py: sha256:ac18abad21a71149bad9f150f9339d645d76cbc4e59d26d6a62f1595d50fa162
+dependencies:
+- jarvis-research>=0.14,<0.15
+permissions:
+- read_input_snapshot
+- write_private_output
+origin: human_provided
