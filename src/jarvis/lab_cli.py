@@ -27,6 +27,20 @@ def add_commands(commands: Any) -> None:
     lab.add_parser("fixture")
     lab.add_parser("team-fixture")
     lab.add_parser("session-fixture")
+    recover = lab.add_parser("recover-experience")
+    recover.add_argument("episode")
+    recover.add_argument("--authority", required=True)
+    lab.add_parser("recovery-advance").add_argument("recovery")
+    lab.add_parser("mission-start").add_argument("spec", type=Path)
+    for name in ["mission-advance", "mission-report", "mission-run"]:
+        mission = lab.add_parser(name)
+        mission.add_argument("mission")
+        if name == "mission-run":
+            mission.add_argument("--state", type=Path, required=True)
+            mission.add_argument("--notebook", type=Path, required=True)
+            mission.add_argument("--notebook-owner")
+            mission.add_argument("--poll-seconds", type=float, default=20)
+            mission.add_argument("--wall-seconds", type=float, default=14400)
     start = lab.add_parser("start")
     start.add_argument("spec", type=Path)
     start.add_argument("--profile", action="append", default=[])
@@ -64,6 +78,39 @@ def add_commands(commands: Any) -> None:
 
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     op = args.operation
+    if op in {"recover-experience", "recovery-advance"}:
+        from jarvis.lab_recovery import ExperienceRecovery
+
+        recovery = ExperienceRecovery(store)
+        if op == "recover-experience":
+            return {"recovery": recovery.create(args.episode, args.authority), "status": "READY"}
+        return recovery.advance(args.recovery)
+    if op.startswith("mission-"):
+        from jarvis.iris_mission import IrisMissionSpec, IrisResearchMission
+
+        mission_engine = IrisResearchMission(store)
+        if op == "mission-start":
+            return {
+                "mission": mission_engine.create(
+                    IrisMissionSpec.model_validate(yaml.safe_load(args.spec.read_text()))
+                ),
+                "status": "READY",
+            }
+        if op == "mission-report":
+            return mission_engine.report(args.mission)
+        if op == "mission-run":
+            from jarvis.mission_runner import run_mission
+
+            return run_mission(
+                mission_engine,
+                args.mission,
+                args.state,
+                notebook=args.notebook,
+                notebook_owner=args.notebook_owner,
+                poll_seconds=args.poll_seconds,
+                max_seconds=args.wall_seconds,
+            )
+        return mission_engine.advance(args.mission)
     if op == "session-fixture":
         from jarvis.iris_lab_session import run_session_fixture
 

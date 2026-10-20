@@ -19,9 +19,11 @@ from jarvis.storage import Store
 TERMINAL = {"SUCCEEDED", "FAILED", "REJECTED", "INVALID_RESULT"}
 
 
-def queue_tasks(store: Store, queue_id: str) -> list[dict[str, Any]]:
+def queue_tasks(store: Store, queue_id: str, *, before: str | None = None) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     for event in store.events(queue_id):
+        if before is not None and event["recorded_at_utc"] > before:
+            continue
         payload = event["payload"]
         if event["event_type"] == "RESEARCH_ENQUEUED":
             rows[payload["task_id"]] = {**payload, "status": "QUEUED"}

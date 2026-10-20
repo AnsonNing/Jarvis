@@ -2,7 +2,7 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. Version 0.12 adds selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
+Jarvis is an executable, domain-extensible research platform. Version 0.13 includes selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 
 Choose **deterministic Q0** for reproducible fixtures or **`--agent codex`** for real LLM hypothesis generation, experimental design, result analysis and revision. The researcher proposes one bounded intervention; the trusted adapter/evaluator computes results. Research Lab verifies scoped reuse and a closed numerical diagnostic capability on artificial tasks. General capability acquisition, arbitrary generated-code execution, model-weight updates and real-domain policy transfer remain future work. Hermes comparisons use existing exposed data and frozen models; they do not establish independently validated trading improvement.
 
@@ -90,6 +90,13 @@ an observed intervention effect before development continues. A private notebook
 exports actual contexts, structured answers, cowork decisions, searches, costs,
 experiments and retrospective proposals. Development-only method/policy proposals
 and diagnostic fidelity do not establish independent Dream or capability utility.
+
+[Research recovery and sustained missions](docs/implementation/P14-research-recovery.md)
+adds exact-reference schemas, receipted correction of known invalid answers,
+explicit recovery of completed histories, trusted execution evidence for Critic,
+and a task controller that continues useful reviewed sessions. Atomic checkpoints
+distinguish child success, task completion, runner limits and failures. Unknown
+operations remain unretried, and all original negative evidence is retained.
 
 ## Run locally
 

@@ -4,6 +4,7 @@ Date: 2026-10-20. Release: 0.11.0. Research Lab now adds on-demand specialists, 
 
 | Area | Status | Evidence and limits |
 | --- | --- | --- |
+| P14 recovery and continued missions | VERIFIED_WITH_LIMITATIONS | Exact-reference correction, explicit historical recovery, decision-time Critic controls, multi-session controller and failure-finalized runner; known/unknown-call and continuation controls passed. Real outcomes remain private. |
 | P13 selected entry sessions | VERIFIED_WITH_LIMITATIONS | Selected-package and calendar-subset baseline admission, side-specific trigger, pinned role effort, explicit PR/MDD feasibility, sequential reviewed session and private notebook; complete artificial session passed. Real outcomes remain private and do not establish independent Dream effectiveness. |
 | P0.1 contracts/package | VERIFIED | Strict records, finite canonical JSON, generated schemas, installable CLI |
 | P0.2 evidence/journal | VERIFIED | Hash tamper, atomic rollback, spawned-process append tests |
@@ -27,9 +28,9 @@ Date: 2026-10-20. Release: 0.11.0. Research Lab now adds on-demand specialists, 
 | P11 reviewed Dream feedback | VERIFIED_WITH_LIMITATIONS | Selected policy controls actual reviewed epochs and new continuous programs; full role/compile/backend costs share an atomic budget; independent fresh/canary programs, adopted policy and measured rollback, new history and second Dream screening pass artificial acceptance. Scripted providers use simulated units; no real-domain policy/efficiency verdict |
 | P12 research self-improvement | VERIFIED_WITH_LIMITATIONS | Parallel independent specialists and directed discussion, pinned human/source boards, live metadata adapters, scoped memory, method/capability/action-policy evolution and later profile use; 154 artificial executions, measured method rollback and two retained profiles; no real Hermes study or general autonomous skill claim |
 
-Validation after selected entry session integration: **268 tests passed in
-287.68s**, Ruff lint/format passed for 103 Python
-files and mypy passed for 77 source modules. Dependency check, schema export,
+Validation after research recovery integration: **275 tests passed in
+342.66s**, Ruff lint/format passed for 109 Python
+files and mypy passed for 82 source modules. Dependency check, schema export,
 bounded runner CLI, task validation and complete self-improvement CLI fixture
 passed. The final acceptance count and exact commands are
 recorded in release acceptance documents; dependency versions are pinned in requirements-lock.txt.

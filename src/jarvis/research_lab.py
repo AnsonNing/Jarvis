@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any
 
+from jarvis.bounded_roles import evidence_role
 from jarvis.campaign import source_identity
 from jarvis.contracts import AdmissionError, BudgetExceeded, IntegrityError, JarvisError, Record
 from jarvis.identity import digest
@@ -40,7 +41,7 @@ from jarvis.lab_tools import (
 from jarvis.providers import CodexProvider, ResearchProvider
 from jarvis.research_program import ResearchProgram, ResearchProgramSpec
 from jarvis.research_program import program_report as raw_program_report
-from jarvis.research_roles import RoleCaller, strict_schema, verify_roles
+from jarvis.research_roles import verify_roles
 from jarvis.researcher import AgentConfig
 from jarvis.storage import Store
 
@@ -125,63 +126,24 @@ class ResearchLab:
         self, owner: str, key: str, role: str, context: dict[str, Any], model: type[Record]
     ) -> Record:
         spec = LabSpec.model_validate(self.store.manifest(owner)["spec"])
-        known = next(
-            (p for p in payloads(self.store, owner, "LAB_ROLE_RECORDED") if p["key"] == key), None
-        )
-        if known:
-            return model.model_validate(self.store.artifacts.get(known["answer_ref"]))
-        requests = [p for p in payloads(self.store, owner, "LAB_ROLE_REQUESTED") if p["key"] == key]
-        schema = strict_schema(model)
-        schema["properties"]["context_id"]["enum"] = [digest(context)]
-        if not requests:
-            self.store.append(
-                owner,
-                "LAB_ROLE_REQUESTED",
-                {
-                    "key": key,
-                    "role": role,
-                    "context_ref": self.store.artifacts.put(context),
-                    "schema_ref": self.store.artifacts.put(schema),
-                },
-            )
-            request = {"context_ref": digest(context), "schema_ref": digest(schema)}
-        else:
-            request = requests[0]
-        frozen = self.store.artifacts.get(request["context_ref"])
         provider = self.provider_factory(spec.role_config)
         if provider.identity() != self.store.manifest(owner)["provider"]:
             raise IntegrityError("lab role provider changed")
-        response = RoleCaller(self.store, provider, spec.role_config).call(
+        return evidence_role(
+            self.store,
             owner,
+            key,
             role,
-            frozen,
-            self.store.artifacts.get(request["schema_ref"]),
-            role_budget=True,
-            guidance="Act as the declared "
+            context,
+            model,
+            provider,
+            spec.role_config,
+            "Act as the declared "
             + role
             + ". "
             + spec.method.specialist_guidance
             + " Give concise evidence-linked conclusions and counterarguments, not hidden reasoning. Do not output trading settings unless the schema requests them.",
         )
-        answer = model.model_validate(response["answer"])
-        if answer.context_id != digest(frozen):  # type: ignore[attr-defined]
-            raise AdmissionError("stale specialist context")
-        if isinstance(answer, ExpertOpinion) and not set(answer.evidence_refs) <= set(
-            frozen["visible_evidence_ids"]
-        ):
-            raise AdmissionError("specialist used unavailable evidence")
-        self.store.append(
-            owner,
-            "LAB_ROLE_RECORDED",
-            {
-                "key": key,
-                "role": role,
-                "answer_ref": self.store.artifacts.put(answer),
-                "context_ref": request["context_ref"],
-                "receipt_ref": response["receipt_ref"],
-            },
-        )
-        return answer
 
     def root_context(self, owner: str) -> dict[str, Any]:
         spec = LabSpec.model_validate(self.store.manifest(owner)["spec"])
@@ -445,7 +407,8 @@ class ResearchLab:
                 "curate",
                 "curator",
                 {
-                    **context,
+                    **{k: context[k] for k in ["task_id", "family", "goal", "scope"]},
+                    "curation_rules": "Cite only exact completed result IDs. Sources, task briefs and opinions are background, not completed experiment evidence. Retain negative observations; interpretations are provisional.",
                     "visible_evidence_ids": actual_refs,
                     "experiments": report["experiments"],
                     "baseline_comparisons": report["baseline_comparisons"],
@@ -598,7 +561,7 @@ def verify_lab(store: Store, owner: str) -> dict[str, Any]:
             if p["key"] in requests:
                 raise IntegrityError("duplicate specialist request")
             requests[p["key"]] = p
-        elif kind == "LAB_ROLE_RECORDED":
+        elif kind in {"LAB_ROLE_RECORDED", "LAB_ROLE_REJECTED"}:
             if p["key"] in seen or p["key"] not in requests or p["receipt_ref"] not in completed:
                 raise IntegrityError("specialist lacks unique paid/declared receipt")
             r = requests[p["key"]]
@@ -610,6 +573,13 @@ def verify_lab(store: Store, owner: str) -> dict[str, Any]:
                 "capability_selector": CapabilityChoice,
             }
             output_model = output_models.get(p["role"], ExpertOpinion)
+            if kind == "LAB_ROLE_REJECTED":
+                if p["context_ref"] != r["context_ref"] or receipt["answer"] != store.artifacts.get(
+                    p["answer_ref"]
+                ):
+                    raise IntegrityError("rejected role receipt changed")
+                seen.add(p["key"])
+                continue
             if (
                 p["context_ref"] != r["context_ref"]
                 or digest(output_model.model_validate(receipt["answer"])) != p["answer_ref"]

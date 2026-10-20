@@ -17,7 +17,7 @@ from jarvis.lab_contracts import LabSpec
 from jarvis.lab_memory import pin_board
 from jarvis.lab_tools import run_tool
 from jarvis.research_lab import ResearchLab, lab_report, payloads
-from jarvis.research_queue import queue_tasks
+from jarvis.research_queue import queue_tasks, verify_queue
 from jarvis.storage import Store
 
 
@@ -32,6 +32,7 @@ class IrisLabSessionSpec(Record):
     budget: Budget
     shadow_review: bool = False
     propose_capability: bool = False
+    prior_integration_queues: tuple[str, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @model_validator(mode="after")
     def controls(self) -> "IrisLabSessionSpec":
@@ -54,6 +55,63 @@ class IrisLabSessionSpec(Record):
         return self
 
 
+def prior_integration(store: Store, spec: IrisLabSessionSpec) -> list[dict[str, Any]]:
+    retained = []
+    for queue in spec.prior_integration_queues:
+        verify_queue(store, queue)
+        env = store.manifest(queue)["spec"]["environment"]
+        matching = [
+            s
+            for s in spec.stages
+            if all(
+                s.program.queue.environment.model_dump(mode="json")[k] == env[k]
+                for k in [
+                    "side",
+                    "template_sha256",
+                    "model_lineage",
+                    "evaluator_sha256",
+                    "result_origin",
+                ]
+            )
+        ]
+        rows = queue_tasks(store, queue)
+        if (
+            not matching
+            or not rows
+            or any(
+                r["status"] not in {"SUCCEEDED", "FAILED", "REJECTED", "INVALID_RESULT"}
+                for r in rows
+            )
+            or any(store.resource_totals_tree(queue)["pending"].values())
+            or not any(e["event_type"] == "HERMES_WORLD_SEALED" for e in store.events(queue))
+        ):
+            raise IntegrityError(
+                "prior integration must be settled, sealed and match fixed controls"
+            )
+        baseline = store.artifacts.get(rows[0]["result_ref"])
+        changed = [
+            r
+            for r in rows[1:]
+            if r["status"] == "SUCCEEDED"
+            and any(
+                store.artifacts.get(r["result_ref"])[k] != baseline[k]
+                for k in ["entry_only_pl", "count", "daily_pl"]
+            )
+        ]
+        if rows[0]["status"] != "SUCCEEDED" or not changed:
+            raise IntegrityError("prior integration has no measured intervention effect")
+        retained.append(
+            {
+                "queue": queue,
+                "side": env["side"],
+                "baseline_ref": rows[0]["result_ref"],
+                "intervention_refs": [r["result_ref"] for r in changed],
+                "scope": "Prior exposed integration evidence; original negative results and Critic recommendations retained; no new execution or promotion",
+            }
+        )
+    return retained
+
+
 class IrisLabSession:
     def __init__(self, store: Store, lab: ResearchLab | None = None):
         self.store = store
@@ -65,6 +123,7 @@ class IrisLabSession:
                 update={"stages": tuple(pin_board(self.store, s) for s in spec.stages)}
             ).model_dump(mode="json")
         )
+        prior_integration(self.store, spec)
         return self.store.create(
             {
                 "kind": "IrisLabSession",
@@ -155,6 +214,14 @@ class IrisLabSession:
             if manifest["source_identity"] != source_identity():
                 raise IntegrityError("active session runtime changed")
             spec = IrisLabSessionSpec.model_validate(manifest["spec"])
+            if spec.prior_integration_queues and not payloads(
+                self.store, owner, "SESSION_PRIOR_INTEGRATION"
+            ):
+                self.store.append(
+                    owner,
+                    "SESSION_PRIOR_INTEGRATION",
+                    {"evidence": prior_integration(self.store, spec)},
+                )
             if (
                 self.lab.provider_factory(spec.stages[0].role_config).identity()
                 != manifest["provider"]
@@ -366,6 +433,7 @@ class IrisLabSession:
 
     def report(self, owner: str) -> dict[str, Any]:
         spec = IrisLabSessionSpec.model_validate(self.store.manifest(owner)["spec"])
+        prior_integration(self.store, spec)
         links = payloads(self.store, owner, "SESSION_STAGE_CREATED")
         if [p["index"] for p in links] != list(range(len(links))):
             raise IntegrityError("session stage lineage duplicated or reordered")

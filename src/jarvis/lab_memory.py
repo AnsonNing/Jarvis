@@ -58,9 +58,13 @@ def make_experience(store: Store, owner: str, program: str, proposal: Experience
 def verify_experience(store: Store, ref: str) -> ResearchExperience:
     value = ResearchExperience.model_validate(store.artifacts.get(ref))
     producer = store.manifest(value.producer)
-    if producer["kind"] != "ResearchLabEpisode" or value.scope_id != scope_id(
-        LabSpec.model_validate(producer["spec"])
-    ):
+    if producer["kind"] == "ResearchExperienceRecovery":
+        from jarvis.lab_recovery import verify_recovery_origin
+
+        verify_recovery_origin(store, value.producer)
+    elif producer["kind"] != "ResearchLabEpisode":
+        raise IntegrityError("experience producer kind changed")
+    if value.scope_id != scope_id(LabSpec.model_validate(producer["spec"])):
         raise IntegrityError("experience scope changed")
     report = program_report(store, value.program_id)
     if (

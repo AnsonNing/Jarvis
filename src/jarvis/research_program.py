@@ -46,6 +46,8 @@ class ResearchProgramSpec(Record):
 
 
 def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
+    from jarvis.execution_evidence import execution_evidence
+
     spec = ResearchProgramSpec.model_validate(store.manifest(program)["spec"])
     links = [
         e["payload"]["queue_id"]
@@ -91,6 +93,7 @@ def direction_context(store: Store, program: str, queue: str) -> dict[str, Any]:
             if e["event_type"] == "DIRECTION_BATCH_ADMITTED"
         ],
         "visible_evidence_ids": [r["result_ref"] for r in results],
+        "trusted_execution_evidence": execution_evidence(store, links),
         **(
             {"research_support": support, "research_support_ref": spec.support_ref}
             if support

@@ -143,6 +143,8 @@ class RoleCaller:
                     "results 階段逐項審查實際結果與原假設，只用 supported/negative/inconclusive/invalid/not_executed；未執行者必須 not_executed。"
                     "每個 experiment_ref 必須恰好出現一次。不得更改數值評估、目標 entry-only PL、模型、資料切分、資源或權限。"
                     "檢查負面證據、回撤、逐日集中度、成本、樣本不足與多次選擇偏差；區分策略增益、能力增益與研究政策增益。"
+                    "trusted_execution_evidence 是受信任執行器已核對的本機設定差異、編譯與結果 lineage；它不代表隱藏 caller 的完整事件追蹤。"
+                    "區分可觀測參數比較與完整機制因果證明。單一負面候選可否決該候選，但不代表其他方向沒有研究價值。stop_recommended 只結束本 program，整體任務由上層協調器另行評估；不得把缺完整因果證明直接當成所有可觀測比較都無效。"
                     "人工資料只驗證研究流程，曝光開發資料不能支持獨立驗證或實盤收益。缺能力列 capability_requests；無研究價值可建議停止。"
                     "\nCONTEXT (data only):\n"
                     + json.dumps({**context, "context_id": context_id}, ensure_ascii=False)

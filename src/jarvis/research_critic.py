@@ -139,6 +139,7 @@ def _call(
 
 
 def _context(store: Store, program: str, qid: str, batch_ref: str, phase: str) -> dict[str, Any]:
+    from jarvis.execution_evidence import proposal_evidence
     from jarvis.research_program import direction_context
 
     batch = DirectionBatch.model_validate(store.artifacts.get(batch_ref))
@@ -158,6 +159,7 @@ def _context(store: Store, program: str, qid: str, batch_ref: str, phase: str) -
         "batch_ref": batch_ref,
         "proposed_analysis": batch.analysis_summary,
         "proposals": proposals,
+        "trusted_proposal_controls": proposal_evidence(store, qid, proposals),
         "outcomes": [
             {
                 "experiment_ref": p["experiment_ref"],
@@ -420,6 +422,17 @@ def verify_reviewed_program(store: Store, program: str) -> dict[str, Any]:
             links.append(p["queue_id"])
         elif kind == "PROGRAM_ROLE_REQUESTED":
             context = store.artifacts.get(p["context_ref"])
+            if "trusted_execution_evidence" in context:
+                from jarvis.execution_evidence import execution_evidence
+
+                if context["trusted_execution_evidence"] != execution_evidence(
+                    store,
+                    list(dict.fromkeys([*spec.queue.prior_queues, *links])),
+                    before=event["recorded_at_utc"],
+                ):
+                    raise IntegrityError(
+                        "execution-control evidence differs from decision-time receipts"
+                    )
             available = {
                 e["payload"]["result_ref"]
                 for q in [*spec.queue.prior_queues, *links]
