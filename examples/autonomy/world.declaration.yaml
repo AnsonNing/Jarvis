@@ -1,0 +1,9 @@
+# Synthetic Hermes-like world (SIMULATED_FIXTURE). Safe to run locally.
+adapter: jarvis.quant_world:declared_world
+adapter_args:
+  root: .jarvis/autonomy-world
+  seed: 11
+  family: balanced
+agent: fixture          # "codex" uses the local Codex CLI for every role
+max_decisions: 30
+max_concurrent_actions: 1

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.contracts import Budget, BudgetExceeded, Cost, IntegrityError, JarvisError
-from jarvis.identity import canonical, digest
+from jarvis.identity import canonical, digest, raw_digest
 
 
 def utcnow() -> str:
@@ -71,11 +71,65 @@ class ArtifactStore:
         return value
 
 
+class BlobStore:
+    """Content-addressed raw bytes (tables, model files, source); hashed as captured."""
+
+    limit = 256 * 1024 * 1024
+
+    def __init__(self, root: Path):
+        self.root = root
+
+    def path(self, ref: str) -> Path:
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}", ref):
+            raise IntegrityError("invalid blob reference")
+        return self.root / ref[7:9] / ref[7:]
+
+    def put(self, data: bytes) -> str:
+        if len(data) > self.limit:
+            raise IntegrityError("blob exceeds admitted size")
+        ref = raw_digest(data)
+        path = self.path(ref)
+        if path.exists():
+            self.get(ref)
+            return ref
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
+        try:
+            with temp.open("xb") as f:
+                os.chmod(temp, 0o600)
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.link(temp, path)
+                sync_directory(path.parent)
+            except FileExistsError:
+                pass
+        finally:
+            temp.unlink(missing_ok=True)
+        return ref
+
+    def put_file(self, path: Path) -> str:
+        with path.open("rb") as stream:
+            data = stream.read(self.limit + 1)
+        return self.put(data)
+
+    def get(self, ref: str) -> bytes:
+        try:
+            data = self.path(ref).read_bytes()
+        except FileNotFoundError as exc:
+            raise IntegrityError(f"missing blob {ref}") from exc
+        if raw_digest(data) != ref:
+            raise IntegrityError(f"blob hash mismatch: {ref}")
+        return data
+
+
 class Store:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.artifacts = ArtifactStore(self.root / "artifacts")
+        self.blobs = BlobStore(self.root / "blobs")
         self.db_path = self.root / "journal.sqlite3"
         with self.bootstrap_lock(), contextlib.closing(self.connect()) as conn:
             conn.executescript("""
@@ -518,6 +572,35 @@ class Store:
                     "receipt_ref": ref,
                     "turn_ref": turn_ref,
                     "rejection": rejection,
+                },
+            )
+
+    def settle_at_reservation(self, job_id: str, reason: str) -> None:
+        """Charge an ended call whose usage is unknown at its full reservation (an upper bound
+        set before dispatch). Only for calls whose receipt proves the process ended."""
+        receipt = self.read_receipt(job_id)
+        if receipt is None:
+            raise IntegrityError("no receipt: completion is unknown; reconcile manually")
+        with self.transaction() as conn:
+            job = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                raise IntegrityError("unknown job")
+            if job["finalized"]:
+                return
+            ref = self.artifacts.put(receipt)
+            conn.execute(
+                "UPDATE jobs SET status='SETTLED_AT_RESERVATION',actual=reservation,receipt_ref=?,finalized=1 WHERE id=?",
+                (ref, job_id),
+            )
+            self._append(
+                conn,
+                job["campaign_id"],
+                "JOB_SETTLED_AT_RESERVATION",
+                {
+                    "job_id": job_id,
+                    "reason": reason,
+                    "receipt_ref": ref,
+                    "charged": Cost.model_validate_json(job["reservation"]).model_dump(),
                 },
             )
 

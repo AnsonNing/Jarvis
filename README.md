@@ -2,7 +2,15 @@
 
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
-Jarvis is an executable, domain-extensible research platform. **Version 0.14 adds mechanism research:** a complete owner contract, competing hypotheses, typed inspection/diagnosis/consultation/experiment/build/stop actions, independent Critic review, reusable diagnostic skills and a separate isolated Skill Builder. The Director can seek evidence before submitting another backtest. Newly validated skills require a versioned successor session; fidelity does not imply research utility. The [mechanism research guide](docs/implementation/P15-mechanism-research.md) explains the pipeline, data requirements and boundaries. This release starts no real Hermes research or background automation.
+Jarvis is an executable, domain-extensible research platform. **Version 0.15 adds autonomous research sessions:** give Jarvis a baseline, a goal, a budget and what may change, and a Director chooses among reading source, agentic analysis in an OS-isolated workbench, explicit backtest matrices, model retraining, code changes to strategy rules or the training pipeline, and multi-objective comparison. An independent Critic reviews each result, the owner can advise at any time (every item must be answered), a stop guard prevents premature stops, and the session ends with a reproducible research deliverable. Dream-RSI now improves the action-selection policy itself, with paired fresh validation on a hidden holdout, adoption, canary and rollback. See the [autonomous research guide](docs/implementation/P16-autonomous-research.md); it is verified end to end on a synthetic Hermes-like world and starts no real Hermes research.
+
+```sh
+jarvis autonomy sandbox-check
+jarvis --store .jarvis/auto-fixture autonomy fixture --policy explain --output local/auto-fixture
+jarvis --store .jarvis/auto-dream autonomy dream-fixture
+```
+
+Version 0.14 added mechanism research: a complete owner contract, competing hypotheses, typed inspection/diagnosis/consultation/experiment/build/stop actions, independent Critic review, reusable diagnostic skills and a separate isolated Skill Builder. The Director can seek evidence before submitting another backtest. Newly validated skills require a versioned successor session; fidelity does not imply research utility. The [mechanism research guide](docs/implementation/P15-mechanism-research.md) explains the pipeline, data requirements and boundaries. This release starts no real Hermes research or background automation.
 
 Version 0.13 introduced selected-package baseline admission, side-isolated entry-trigger controls, explicit PR/drawdown feasibility and a shared-budget session joining specialist teams, independent Critic review and sequential integration/development stages. On-demand public source discovery, pinned human-input boards, scoped experience reuse and controlled research-method/capability/policy evolution remain available. Shared full budgets, prospective validation, actual adoption, canary rollback and new-history feedback remain mandatory. Give the system a strategy baseline, goal and research directions: it admits bounded experiments, executes the supplied backend, analyzes entry-only PL and risks, revises direction and seals replayable histories. Domain details stay in adapters.
 

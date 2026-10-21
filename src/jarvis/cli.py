@@ -75,6 +75,9 @@ def parser() -> argparse.ArgumentParser:
     from jarvis.mechanism_cli import add_commands as add_workflow_commands
 
     add_workflow_commands(commands)
+    from jarvis.autonomy_cli import add_commands as add_autonomy_commands
+
+    add_autonomy_commands(commands)
     task = commands.add_parser("task").add_subparsers(dest="operation", required=True)
     task.add_parser("validate").add_argument("path", type=Path)
     schema = commands.add_parser("schema")
@@ -146,6 +149,17 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.command == "autonomy":
+        from jarvis.autonomy_cli import run as run_autonomy
+        from jarvis.autonomy_cli import sandbox_check as autonomy_sandbox
+        from jarvis.storage import Store
+
+        emit(
+            autonomy_sandbox()
+            if args.operation == "sandbox-check"
+            else run_autonomy(Store(args.store), args)
+        )
+        return
     if args.command == "workflow":
         from jarvis.mechanism_cli import preflight, sandbox_check
         from jarvis.mechanism_cli import run as run_workflow

@@ -1,0 +1,43 @@
+# Template for a PRIVATE real-domain declaration. Copy to local/ (git-ignored) and fill in.
+# Nothing here starts research: `jarvis autonomy start` only declares a session.
+adapter: jarvis.autonomy_adapters:declared_domain
+agent: codex
+max_decisions: 200
+max_concurrent_actions: 2
+role_config:
+  director:   {model: gpt-6.1-sol, reasoning_effort: high, max_calls: 1000, reserve_tokens: 120000, timeout_seconds: 900}
+  critic:     {model: gpt-6.1-sol, reasoning_effort: high, max_calls: 1000, reserve_tokens: 120000, timeout_seconds: 900}
+  worker:     {model: gpt-6.1-sol, reasoning_effort: medium, max_calls: 1000, reserve_tokens: 120000, timeout_seconds: 600}
+  consultant: {model: gpt-6.1-sol, reasoning_effort: high, max_calls: 100, reserve_tokens: 120000, timeout_seconds: 900}
+budget:
+  max_actions: 400
+  max_tool_calls: 400
+  max_llm_tokens: 8000000
+  max_wall_seconds: 172800
+  max_compute_units: 2000
+  max_parallel_jobs: 12
+adapter_args:
+  # AutonomyContract JSON without baseline_candidate_ref (task, settings space with
+  # affects_model_inputs, training_space, implement_targets, source_scopes, metrics,
+  # acceptance_profiles, analysis_environment, grants, constraints).
+  contract: <private>/contract.json
+  baseline:
+    model_id: <accepted baseline model id>
+    data_policy: <how the baseline model was trained>
+    settings: {heuristic_cancel_bps: 40.0}
+    model_files:                       # whole Iris region bodies of the accepted models
+      cancelmodellong.region: <private>/regions/cancelmodellong.region
+      tradingmodellong.region: <private>/regions/tradingmodellong.region
+  inputs:                              # owner baseline tables the researcher may analyze
+    - {name: trades, path: <private>/baseline_trades.csv, description: Baseline entry trades}
+  iris_environments:                   # one pinned IrisEnvironment JSON per contract period
+    dev: <private>/iris-env-dev.json
+  trainer: <private>/trainer-command.json        # CommandSpec around the existing pipeline
+  region_validators:
+    cancelconditions:
+      template: <private>/iris_template.txt
+      template_sha256: sha256:<hash>
+  command_validators:
+    features:
+      base_paths: {features.py: <private>/pipeline/features.py}
+      check: {argv: [<private>/pipeline/check_features.py], readonly: [<private>/pipeline], description: pipeline unit and leakage tests}

@@ -85,3 +85,11 @@ Dream-RSI 流程：線上研究 → Discovery Tree → History Pool → 離線�
 Jarvis GitHub 為**公開 repository**，請勿推送私有資料、實際策略程式、金鑰、模型權重或從其他 private repo 大量複製的原始碼。
 
 詳細入口：[根目錄 README](../../README.md) · [Codex 指令 AGENTS.md](../../AGENTS.md) · [實作階段](../09_ROADMAP.md) · [Dream-RSI 規格](../05_DREAM_RSI.md) · [測試矩陣](../10_TEST_PLAN.md)。
+
+## 八、0.15：像 Junior Quant Researcher 一樣自主研究
+
+給 Jarvis baseline、研究目標、預算與允許修改的範圍後，Director 會自己決定下一步：讀原始碼（READ_SOURCE）、在 OS 沙箱內寫 pandas 程式分析成交（ANALYZE）、設計明確的回測矩陣（BACKTEST）、重訓模型（TRAIN_MODEL）、改策略規則或訓練 pipeline（IMPLEMENT，需通過受信任驗證器）、以多目標 profile 比較候選（COMPARE）。獨立 Critic 審查每個結果；人類可隨時 `advise`，Director 必須逐條回應；停止保護要求每個開放分支都有證據才能結束；最後輸出研究交付報告（baseline、歷程、候選、比較、finalist、驗證等級、後續方向）。
+
+Dream-RSI 改善的是「選擇研究動作的政策 Q」：開發 session → 由歷史提出候選政策 → 精確 replay 篩選 → 在不相交的新任務上配對執行、以研究角色看不到的 holdout 評分 → 通過才採用 → canary 退步即 rollback。
+
+目前以合成 Hermes-like 世界端到端驗證（只調 bp 約 +3%，重訓約 +8%，regime-aware 規則約 +14%，規則加重訓約 +22%），沒有啟動真實 Hermes 研究。詳見 [P16 文件](../implementation/P16-autonomous-research.md)。

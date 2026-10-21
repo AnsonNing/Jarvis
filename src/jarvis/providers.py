@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -12,6 +13,20 @@ from typing import Any, Protocol
 from jarvis.contracts import AdmissionError, Cost, JarvisError
 from jarvis.identity import file_digest
 from jarvis.researcher import AgentConfig
+
+QUOTA_PATTERN = re.compile(
+    r"usage limit|rate limit|quota|insufficient credits|purchase more credits", re.I
+)
+
+
+def quota_refusal(events: list[dict[str, Any]]) -> str | None:
+    """Message of a service-side usage/rate-limit refusal, if the stream reports one."""
+    for event in events:
+        if event.get("type") in {"turn.failed", "error"}:
+            message = str((event.get("error") or {}).get("message") or event.get("message") or "")
+            if QUOTA_PATTERN.search(message):
+                return message
+    return None
 
 
 class ResearchProvider(Protocol):
@@ -166,6 +181,12 @@ class CodexProvider:
             usage = None
         if forbidden:
             error = "FORBIDDEN_PROVIDER_TOOL"
+        refusal = quota_refusal(events)
+        if refusal and not terminal and not forbidden:
+            # The service refused the turn before any model work (usage/rate limit):
+            # nothing was generated, so the call is settled with zero tokens.
+            error = "PROVIDER_QUOTA_EXHAUSTED: " + refusal[:300]
+            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
         answer: Any = None
         try:
             answer = json.loads((directory / "answer.json").read_text())
@@ -173,6 +194,8 @@ class CodexProvider:
             error = error or "INVALID_STRUCTURED_RESPONSE"
         if usage is None:
             error = error or "USAGE_UNAVAILABLE"
+        if error and error.startswith("PROVIDER_QUOTA_EXHAUSTED"):
+            answer = None
         cost = (
             None
             if usage is None
