@@ -43,3 +43,14 @@ Dream-RSI improves the policy that chooses those actions. Design and limits:
 
 Scripted roles demonstrate mechanics, not research quality. Synthetic results are
 SIMULATED_FIXTURE. No real-domain policy, strategy or efficiency verdict.
+
+## P17 additions — real-domain executors
+
+[P17](P17-real-domain-executors.md): `IrisRegionBacktester` with region-setting bindings,
+trained-model constants, per-period calendars, a submission ledger with an owner daily
+cap, raw-source tables for training; `CommandTrainer` interpreter mode; compile-check
+harness for region patches; `ClaudeCodeProvider` and `RelayProvider`; worker invalid
+finishes return to the worker; backtest provenance shown to research roles. A private
+adapter (not in this repository) declared the real strategy: its baseline replay, live
+Iris submissions, sandboxed training with C++ parity, region compile checks and a small
+real study ran end to end. Full regression after these changes: **344 passed**.

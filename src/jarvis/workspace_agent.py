@@ -126,8 +126,12 @@ def run_workspace_task(
             }
         )
     for index in range(len(transcript), max_steps):
-        if transcript and transcript[-1]["request"]["tool"] == "finish":
-            break
+        if (
+            transcript
+            and transcript[-1]["request"]["tool"] == "finish"
+            and transcript[-1]["observation"].get("status") == "OK"
+        ):
+            break  # an invalid finish is returned to the worker to correct
         context = {
             "task": task,
             "workspace": listing(workspace),
@@ -220,7 +224,16 @@ def run_workspace_task(
             {"step": index, "request": step.model_dump(mode="json"), "observation": observation}
         )
     last = transcript[-1]["request"] if transcript else None
-    if not last or last["tool"] != "finish":
+    if not last or last["tool"] != "finish" or transcript[-1]["observation"].get("status") != "OK":
+        if last and last["tool"] == "finish":
+            return {
+                "status": "INVALID_FINISH",
+                "finish_check": transcript[-1]["observation"],
+                "summary": last["summary"],
+                "findings": last["findings"],
+                "steps": len(transcript),
+                "transcript_owner": owner,
+            }
         return {"status": "STEP_LIMIT", "steps": len(transcript), "transcript_owner": owner}
     finish_check = transcript[-1]["observation"]
     return {

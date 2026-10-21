@@ -850,3 +850,30 @@ def test_director_context_is_bounded_and_keeps_every_experiment(tmp_path):
     tight = engine._director_context(owner, state, 1, 0)
     assert len(json.dumps(tight)) < len(json.dumps(context))
     assert all("result" not in o for o in tight["observations"][:-1])
+
+
+class _SloppyFinish(QuantFixtureProvider):
+    """Real-run regression: the first finish names a non-existent output file."""
+
+    def worker(self, c):
+        answer = super().worker(c)
+        finishes = [t for t in c["transcript"] if t["request"]["tool"] == "finish"]
+        if answer["tool"] == "finish" and c["task"]["kind"] == "analysis" and not finishes:
+            return {**answer, "output_files": [*answer["output_files"], "work/extra.csv peaceful?"]}
+        return answer
+
+
+def test_invalid_finish_goes_back_to_the_worker(tmp_path):
+    workbench_or_skip(tmp_path)
+    store, engine, owner, _ = session(
+        tmp_path, policy=EXPLAIN, provider=lambda cfg, role: _SloppyFinish(role)
+    )
+    assert engine.run(owner, wall_seconds=600)["status"] == "CLOSED"
+    analyses = [
+        store.artifacts.get(e["payload"]["result_ref"])
+        for e in store.events(owner)
+        if e["event_type"] == "ACTION_COMPLETED" and e["payload"]["kind"] == "ANALYZE"
+    ]
+    assert analyses and all(a["status"] == "OBSERVED" for a in analyses)
+    ledger = engine.director_context(owner, engine.state(owner))["experiment_ledger"]
+    assert ledger and all("result_origin" in row["provenance"] for row in ledger)

@@ -15,17 +15,34 @@ from jarvis.researcher import AgentConfig
 from jarvis.storage import Store
 
 
-def provider_factory(agent: str, *, eager_stop: bool = False) -> Any:
+def provider_factory(agent: str, *, eager_stop: bool = False, relay: Path | None = None) -> Any:
+    """codex / claude (headless CLIs), relay (answered through files), fixture (scripted)."""
     if agent == "codex":
         from jarvis.providers import CodexProvider
 
         return lambda config, role: CodexProvider(config)
+    if agent == "claude":
+        from jarvis.providers import ClaudeCodeProvider
+
+        return lambda config, role: ClaudeCodeProvider(config)
+    if agent == "relay":
+        from jarvis.providers import RelayProvider
+
+        if relay is None:
+            raise AdmissionError("relay agent needs a relay directory")
+        return lambda config, role: RelayProvider(config, relay)
     from jarvis.quant_fixture import QuantFixtureProvider
 
     return lambda config, role: QuantFixtureProvider(role, eager_stop=eager_stop)
 
 
 def load_adapter(declaration: dict[str, Any]) -> Any:
+    import sys
+
+    if declaration.get("adapter_path"):
+        path = str(Path(declaration["adapter_path"]).resolve())
+        if path not in sys.path:
+            sys.path.insert(0, path)
     module, _, name = str(declaration["adapter"]).partition(":")
     if not module or not name:
         raise AdmissionError("adapter must be module:function")
@@ -37,14 +54,18 @@ def add_commands(commands: Any) -> None:
     auto.add_parser("sandbox-check")
     fixture = auto.add_parser("fixture")
     fixture.add_argument("--policy", choices=["q0", "explain"], default="explain")
-    fixture.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
+    fixture.add_argument(
+        "--agent", choices=["fixture", "codex", "claude", "relay"], default="fixture"
+    )
     fixture.add_argument("--guidance")
     fixture.add_argument("--eager-stop", action="store_true")
     fixture.add_argument("--max-decisions", type=int, default=30)
     fixture.add_argument("--effort", choices=["low", "medium", "high", "xhigh"], default="high")
     fixture.add_argument("--output", type=Path)
     dream = auto.add_parser("dream-fixture")
-    dream.add_argument("--agent", choices=["fixture", "codex"], default="fixture")
+    dream.add_argument(
+        "--agent", choices=["fixture", "codex", "claude", "relay"], default="fixture"
+    )
     dream.add_argument("--max-decisions", type=int, default=30)
     auto.add_parser("start").add_argument("declaration", type=Path)
     run = auto.add_parser("run")
@@ -91,7 +112,8 @@ def engine_for(store: Store, declaration: dict[str, Any]) -> tuple[Any, dict[str
 
     built = load_adapter(declaration)(store, declaration.get("adapter_args", {}))
     agent = declaration.get("agent", "codex")
-    return AutonomousResearch(store, built["executors"], provider_factory(agent)), built
+    factory = provider_factory(agent, relay=store.root / "relay")
+    return AutonomousResearch(store, built["executors"], factory), built
 
 
 def status(store: Store, owner: str) -> dict[str, Any]:
@@ -155,7 +177,9 @@ def run_fixture(store: Store, args: argparse.Namespace) -> dict[str, Any]:
         timeout_seconds=900,
     )
     engine = AutonomousResearch(
-        store, world_executors(world), provider_factory(args.agent, eager_stop=args.eager_stop)
+        store,
+        world_executors(world),
+        provider_factory(args.agent, eager_stop=args.eager_stop, relay=store.root / "relay"),
     )
     owner = engine.create(
         AutonomySessionSpec(
@@ -208,7 +232,9 @@ def run_dream_fixture(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     from jarvis.quant_world import QuantWorldFactory
 
     registry = PolicyRegistry(store).create()
-    dream = AutonomyDream(store, QuantWorldFactory(), provider_factory(args.agent))
+    dream = AutonomyDream(
+        store, QuantWorldFactory(), provider_factory(args.agent, relay=store.root / "relay")
+    )
     round_id = dream.create(
         AutonomyDreamSpec(
             registry=registry,

@@ -215,3 +215,211 @@ class CodexProvider:
             "stderr": (directory / "stderr.txt").read_text(),
             "note": "Cached input is a subset of input_tokens; no separate monetary charge is inferred",
         }
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text.encode()) // 4)
+
+
+class RelayProvider:
+    """A human or assistant answers each role request through files (tools-disabled).
+
+    `complete` writes prompt.txt and schema.json, announces the request under
+    `<relay>/pending/`, and waits for `answer.json` in the request directory. Token
+    units are estimated from bytes because no metered API is involved.
+    """
+
+    def __init__(self, config: AgentConfig, relay: Path, *, timeout_seconds: float = 6 * 3600):
+        self.config, self.relay, self.timeout_seconds = config, relay.resolve(), timeout_seconds
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "provider": "file-relay",
+            "model": self.config.model or "relay-answerer",
+            "tools": "disabled",
+            "token_units": "estimated from bytes",
+        }
+
+    def complete(self, prompt: str, schema: dict[str, Any], directory: Path) -> dict[str, Any]:
+        directory = directory.resolve()
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (directory / "prompt.txt").write_text(prompt)
+        (directory / "schema.json").write_text(json.dumps(schema))
+        pending = self.relay / "pending"
+        pending.mkdir(parents=True, exist_ok=True, mode=0o700)
+        ticket = pending / (directory.name + ".json")
+        ticket.write_text(
+            json.dumps(
+                {
+                    "directory": str(directory),
+                    "schema_title": schema.get("title"),
+                    "prompt_bytes": len(prompt.encode()),
+                    "created": time.time(),
+                }
+            )
+        )
+        started = time.monotonic()
+        answer_path = directory / "answer.json"
+        while not answer_path.exists():
+            if time.monotonic() - started > self.timeout_seconds:
+                ticket.unlink(missing_ok=True)
+                return {
+                    "answer": None,
+                    "usage": None,
+                    "cost": None,
+                    "error": "PROVIDER_TIMEOUT",
+                    "events": [],
+                    "stderr": "relay answer not received",
+                }
+            time.sleep(1)
+        time.sleep(0.2)  # allow the writer to finish
+        raw = answer_path.read_text()
+        ticket.unlink(missing_ok=True)
+        try:
+            answer: Any = json.loads(raw)
+            error = None
+        except ValueError:
+            answer, error = None, "INVALID_STRUCTURED_RESPONSE"
+        usage = {
+            "input_tokens": _estimate_tokens(prompt),
+            "output_tokens": _estimate_tokens(raw),
+            "cached_input_tokens": 0,
+        }
+        return {
+            "provider": "file-relay",
+            "answer": answer,
+            "usage": usage,
+            "cost": Cost(
+                llm_tokens=usage["input_tokens"] + usage["output_tokens"],
+                wall_seconds=time.monotonic() - started,
+            ).model_dump(mode="json"),
+            "error": error,
+            "events": [],
+            "stderr": "",
+            "note": "estimated token units",
+        }
+
+
+class ClaudeCodeProvider:
+    """Headless Claude Code (`claude -p --json-schema`) with every tool disabled.
+
+    The executable comes from JARVIS_CLAUDE_EXECUTABLE or PATH and must already be
+    logged in. Usage and quota refusals are read from its JSON result.
+    """
+
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        located = os.environ.get("JARVIS_CLAUDE_EXECUTABLE") or shutil.which("claude")
+        if not located or not Path(located).exists():
+            raise JarvisError("Claude Code executable unavailable; set JARVIS_CLAUDE_EXECUTABLE")
+        self.executable = Path(located).absolute()
+
+    def identity(self) -> dict[str, Any]:
+        version = subprocess.run(
+            [str(self.executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        ).stdout.strip()
+        return {
+            "provider": "claude-code",
+            "version": version,
+            "executable_sha256": file_digest(self.executable),
+            "model": self.config.model,
+            **({"effort": self.config.reasoning_effort} if self.config.reasoning_effort else {}),
+            "tools": "disabled",
+            "session_persistence": "disabled",
+        }
+
+    def complete(self, prompt: str, schema: dict[str, Any], directory: Path) -> dict[str, Any]:
+        directory = directory.resolve()
+        directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        (directory / "prompt.txt").write_text(prompt)
+        cmd = [
+            str(self.executable),
+            "-p",
+            "--output-format",
+            "json",
+            "--json-schema",
+            json.dumps(schema),
+            "--tools",
+            "",
+            "--no-session-persistence",
+            "--permission-mode",
+            "default",
+        ]
+        if self.config.model:
+            cmd += ["--model", self.config.model]
+        if self.config.reasoning_effort in {"low", "medium", "high", "xhigh", "max"}:
+            cmd += ["--effort", self.config.reasoning_effort]
+        env = {
+            k: v for k, v in os.environ.items() if k in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}
+        }
+        started = time.monotonic()
+        try:
+            process = subprocess.run(
+                cmd,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                cwd=directory,
+                env=env,
+                timeout=self.config.timeout_seconds,
+            )
+            out, timed_out = process.stdout, False
+        except subprocess.TimeoutExpired as exc:
+            out, timed_out = (
+                (exc.stdout or b"").decode()
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or ""),
+                True,
+            )
+        (directory / "result.json").write_text(out)
+        try:
+            data = json.loads(out)
+        except ValueError:
+            data = {}
+        text = str(data.get("result") or "")
+        if timed_out:
+            error, usage = "PROVIDER_TIMEOUT", None
+        elif data.get("is_error") and QUOTA_PATTERN.search(text):
+            error = "PROVIDER_QUOTA_EXHAUSTED: " + text[:300]
+            usage = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0}
+        elif data.get("is_error") or not data:
+            error, usage = "PROVIDER_INCOMPLETE: " + text[:300], None
+        else:
+            raw = data.get("usage") or {}
+            cached = int(raw.get("cache_read_input_tokens", 0)) + int(
+                raw.get("cache_creation_input_tokens", 0)
+            )
+            usage = {
+                "input_tokens": int(raw.get("input_tokens", 0)) + cached,
+                "output_tokens": int(raw.get("output_tokens", 0)),
+                "cached_input_tokens": cached,
+            }
+            error = None
+        answer: Any = data.get("structured_output")
+        if answer is None and error is None:
+            try:
+                answer = json.loads(text)
+            except ValueError:
+                error = "INVALID_STRUCTURED_RESPONSE"
+        cost = (
+            None
+            if usage is None
+            else Cost(
+                llm_tokens=usage["input_tokens"] + usage["output_tokens"],
+                wall_seconds=time.monotonic() - started,
+            ).model_dump(mode="json")
+        )
+        return {
+            "provider": "claude-code",
+            "answer": answer,
+            "usage": usage,
+            "cost": cost,
+            "error": error,
+            "events": [],
+            "stderr": "",
+            "result_subtype": data.get("subtype"),
+        }

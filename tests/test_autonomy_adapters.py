@@ -23,7 +23,9 @@ from jarvis.workbench import Workbench
 
 TEMPLATE = (
     "// protected header\n"
-    "// @start:config\nconstexpr double toy_heuristic = 0.004;\n// @end:config\n"
+    "// @start:config\nconstexpr double toy_heuristic = 40 * 0.0001;\n"
+    "constexpr double THRESHOLD_HANG = 0.0005;\n#define BYPASS_MODEL (false)\n"
+    "constexpr int SAMPLING_MS = 100;\n// @end:config\n"
     "// @start:cancelmodel\nold model\n// @end:cancelmodel\n"
     "// @start:cancelconditions\nreturn false;\n// @end:cancelconditions\n"
     "// protected footer\n"
@@ -80,9 +82,13 @@ def candidate_with(store: Store, tmp_path: Path, model_region: str, rule_region:
     folder = tmp_path / "files"
     folder.mkdir(exist_ok=True)
     (folder / "cancelmodel.region").write_text(model_region)
+    (folder / "constants.json").write_text('{"THRESHOLD_HANG": 0.00071}')
     model = ModelArtifact(
         model_id="m1",
-        files={"cancelmodel.region": store.blobs.put_file(folder / "cancelmodel.region")},
+        files={
+            "cancelmodel.region": store.blobs.put_file(folder / "cancelmodel.region"),
+            "constants.json": store.blobs.put_file(folder / "constants.json"),
+        },
         training_config={},
         training_data_ref=None,
         data_policy="d",
@@ -148,31 +154,62 @@ class FakeTransport:
 
 
 def test_iris_backtester_renders_candidate_and_never_resubmits(tmp_path):
+    from jarvis.autonomy_adapters import RegionSetting, SubmissionLedger
+
     store = Store(tmp_path / "store")
     ref = candidate_with(store, tmp_path, "trained model v2\n", "return order.age > 5;\n")
     resolved = resolve_candidate(store, ref, tmp_path / "resolved")
     FakeTransport.calls = {"submit": 0, "collect": 0}
+    bindings = (
+        RegionSetting(
+            name="heuristic_cancel_bps",
+            region="config",
+            symbol="toy_heuristic",
+            syntax="double",
+            scale=0.0001,
+        ),
+        RegionSetting(
+            name="bypass_model", region="config", symbol="BYPASS_MODEL", syntax="macro_bool"
+        ),
+        RegionSetting(name="sampling_ms", region="config", symbol="SAMPLING_MS", syntax="int"),
+    )
     tester = IrisRegionBacktester(
         {"dev": environment(tmp_path)},
-        setting_defaults={"heuristic_cancel_bps": 40.0},
+        settings=bindings,
+        setting_defaults={"heuristic_cancel_bps": 40.0, "bypass_model": False, "sampling_ms": 100},
+        ledger=SubmissionLedger(tmp_path / "ledger.jsonl", daily_limit=2),
         transport_factory=FakeTransport,
         poll_seconds=0,
     )
-    out = tester.run(resolved, {"heuristic_cancel_bps": 30.0}, "dev", tmp_path / "work")
+    settings = {"heuristic_cancel_bps": 30.0, "bypass_model": True, "sampling_ms": 200}
+    out = tester.run(resolved, settings, "dev", tmp_path / "work")
     assert (
         out["status"] == "SUCCEEDED"
         and out["metrics"]["pl"] == 2.5
-        and out["tables"][0]["name"] == "trades"
+        and out["metrics"]["mdd"] == 0.0
+    )
+    assert [t["name"] for t in out["tables"]] == ["raw_source", "trades"]
+    source = json.loads(Path(out["tables"][0]["path"]).read_text())
+    assert source["settings"] == settings and source["raw_csv_sha256"] == file_digest(
+        Path(out["tables"][1]["path"])
     )
     sent = FakeTransport.submitted
-    assert "trained model v2" in sent and "return order.age > 5;" in sent and "0.003" in sent
+    assert "trained model v2" in sent and "return order.age > 5;" in sent
+    assert "toy_heuristic = 0.003;" in sent
+    assert "THRESHOLD_HANG = 0.00071;" in sent and "#define BYPASS_MODEL (true)" in sent
+    assert "SAMPLING_MS = 200;" in sent
     assert "old model" not in sent and sent.startswith("// protected header")
     # A crashed process resumes by collecting the recorded request only.
     FakeTransport.calls["collect"] = 1
-    again = tester.run(resolved, {"heuristic_cancel_bps": 30.0}, "dev", tmp_path / "work")
+    again = tester.run(resolved, settings, "dev", tmp_path / "work")
     assert again["status"] == "SUCCEEDED" and FakeTransport.calls["submit"] == 1
     with pytest.raises(AdmissionError, match="REQUIRES_CAPABILITY"):
         tester.render(resolved, {"unbound_setting": 1}, tmp_path / "work2", "dev")
+    FakeTransport.calls["collect"] = 0
+    tester.run(resolved, {**settings, "sampling_ms": 300}, "dev", tmp_path / "work3")
+    with pytest.raises(AdmissionError, match="QUOTA_GUARD"):
+        tester.run(resolved, {**settings, "sampling_ms": 400}, "dev", tmp_path / "work4")
+    assert FakeTransport.calls["submit"] == 2
 
 
 def test_region_patch_validator_checks_markers_and_scope(tmp_path):
@@ -335,3 +372,101 @@ def test_command_patch_validator_and_declared_domain(tmp_path, isolated):
     assert store.artifacts.get(built["input_refs"][0])["rows"] == 1
     saved = store.artifacts.get(built["contract_ref"])
     assert saved["source_scopes"][0]["sha256"] == file_digest(pipeline / "features.py")
+
+
+def test_relay_provider_round_trip(tmp_path):
+    import threading
+
+    from jarvis.providers import RelayProvider
+    from jarvis.researcher import AgentConfig
+
+    relay = tmp_path / "relay"
+    provider = RelayProvider(AgentConfig(model="assistant"), relay, timeout_seconds=30)
+
+    def answer():
+        import time
+
+        for _ in range(300):
+            tickets = (
+                list((relay / "pending").glob("*.json")) if (relay / "pending").exists() else []
+            )
+            if tickets:
+                request = json.loads(tickets[0].read_text())
+                assert request["schema_title"] == "Answer"
+                Path(request["directory"], "answer.json").write_text('{"ok": true}')
+                return
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    out = provider.complete("question", {"title": "Answer", "type": "object"}, tmp_path / "req-1")
+    thread.join()
+    assert out["answer"] == {"ok": True} and out["error"] is None and out["cost"]["llm_tokens"] > 0
+    assert not list((relay / "pending").glob("*.json"))
+
+
+def test_claude_code_provider_parses_structured_output_and_quota(tmp_path, monkeypatch):
+    from jarvis.contracts import JarvisError
+    from jarvis.providers import ClaudeCodeProvider
+    from jarvis.researcher import AgentConfig
+
+    monkeypatch.delenv("JARVIS_CLAUDE_EXECUTABLE", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    with pytest.raises(JarvisError, match="unavailable"):
+        ClaudeCodeProvider(AgentConfig(model="m"))
+    fake = tmp_path / "claude"
+    payload = {
+        "structured_output": {"ok": True},
+        "result": "",
+        "is_error": False,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 3},
+    }
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 9.9; exit 0; fi\ncat >/dev/null\n'
+        f"echo '{json.dumps(payload)}'\n"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("JARVIS_CLAUDE_EXECUTABLE", str(fake))
+    provider = ClaudeCodeProvider(AgentConfig(model="m", reasoning_effort="medium"))
+    assert provider.identity()["tools"] == "disabled"
+    out = provider.complete("q", {"type": "object"}, tmp_path / "a")
+    assert (
+        out["answer"] == {"ok": True}
+        and out["usage"]["input_tokens"] == 13
+        and out["error"] is None
+    )
+    limited = {"result": "Usage limit reached for this account", "is_error": True, "usage": {}}
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 9.9; exit 0; fi\ncat >/dev/null\n'
+        f"echo '{json.dumps(limited)}'\n"
+    )
+    out = ClaudeCodeProvider(AgentConfig(model="m")).complete(
+        "q", {"type": "object"}, tmp_path / "b"
+    )
+    assert out["error"].startswith("PROVIDER_QUOTA_EXHAUSTED") and out["cost"]["llm_tokens"] == 0
+
+
+def test_command_trainer_interpreter_mode(tmp_path, isolated):
+    entry = tmp_path / "owner" / "entry.py"
+    entry.parent.mkdir()
+    entry.write_text(
+        "import json, pathlib, sys\n"
+        "pathlib.Path('outputs/m.region').write_text(' '.join(sys.argv[1:]))\n"
+        "pathlib.Path('result.json').write_text(json.dumps({'status': 'SUCCEEDED', 'model_id': 'x', 'files': ['m.region'], 'validation': {}}))\n"
+    )
+    spec = CommandSpec(
+        argv=(str(entry), "--side", "LONG"),
+        readonly=(str(entry.parent),),
+        description="d",
+        mode="interpreter",
+    )
+    store = Store(tmp_path / "store")
+    base = resolve_candidate(
+        store, candidate_with(store, tmp_path, "model\n", None), tmp_path / "resolved"
+    )
+    out = CommandTrainer(spec, Workbench(analysis_environment())).run(
+        base, {}, None, None, tmp_path / "t"
+    )
+    assert (
+        out["status"] == "SUCCEEDED" and Path(out["files"][0]["path"]).read_text() == "--side LONG"
+    )

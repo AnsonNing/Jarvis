@@ -89,6 +89,27 @@ def clip(value: Any, text: int = 600, items: int = 40) -> Any:
     return value
 
 
+def provenance_summary(observation: dict[str, Any]) -> dict[str, Any]:
+    """Trusted execution facts shown to research roles so they need not re-derive them."""
+    p = observation.get("provenance", {})
+    keys = (
+        "request_id",
+        "reused_request",
+        "commit",
+        "raw_sha256",
+        "evaluator_sha256",
+        "calendar",
+        "note",
+    )
+    return {
+        "result_origin": observation.get("result_origin"),
+        "evaluator_id": observation.get("evaluator_id"),
+        "period": observation.get("period"),
+        **{k: (p[k] if k != "calendar" else f"{len(p[k])} trading dates") for k in keys if k in p},
+        "trades_table_is_raw_iris_output": "trades" in observation.get("tables", {}),
+    }
+
+
 def payloads(store: Store, owner: str, kind: str) -> list[dict[str, Any]]:
     return [e["payload"] for e in store.events(owner) if e["event_type"] == kind]
 
@@ -533,6 +554,7 @@ class AutonomousResearch:
             "status": o["status"],
             "metrics": o["metrics"],
             "tables": o["tables"],
+            "provenance": provenance_summary(o),
         }
 
     def _table_summary(self, ref: str) -> dict[str, Any]:
@@ -1360,6 +1382,7 @@ class AutonomousResearch:
                             "error",
                         )
                     },
+                    "provenance": provenance_summary(observation),
                 }
             )
         return (

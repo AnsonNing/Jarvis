@@ -39,6 +39,10 @@ class AnalysisEnvironment(Record):
     toolchain_paths: tuple[str, ...] = Field(default=(), max_length=8)
     packages: dict[str, str] = Field(default_factory=dict)
     limits: WorkbenchLimits = WorkbenchLimits()
+    # Lets owner pipelines run binaries they compiled inside their own work directory
+    # (e.g. an HPP parity probe). Still no network and no other writable location.
+    allow_exec_in_workdir: bool = False
+    extra_env: dict[str, str] = Field(default_factory=dict)
 
 
 def tail(data: bytes, limit: int = 12000) -> str:
@@ -97,6 +101,8 @@ class Workbench:
             *[subpath(p.resolve()) for p in readonly],
         ]
         execs = [literal(self.interpreter)]
+        if self.environment.allow_exec_in_workdir:
+            execs.append(subpath(workdir))
         for tool in [*self.environment.toolchain_paths, *[str(e) for e in executables]]:
             path = Path(tool).resolve()
             reads.append(subpath(path))
@@ -224,6 +230,7 @@ class Workbench:
                     "MPLBACKEND": "Agg",
                     "OMP_NUM_THREADS": "1",
                     "OPENBLAS_NUM_THREADS": "1",
+                    **self.environment.extra_env,
                 },
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
