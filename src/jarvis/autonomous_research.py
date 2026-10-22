@@ -354,6 +354,7 @@ class AutonomousResearch:
                 *memory["candidates"],
                 *memory["tables"],
                 *memory["experiments"],
+                *[g["ref"] for g in memory.get("owner_guidance", [])],
             ]
         state["memory"] = memory
         state["visible"] = list(dict.fromkeys(visible))
@@ -646,11 +647,21 @@ class AutonomousResearch:
             "note": "Earlier sessions in this domain. Their latest same-dataset experiments are in "
             "experiment_ledger (from_memory) and are not repeated; their candidates and tables can be used "
             "directly; skills are mounted under skills/ in every analysis workspace. Older or other-dataset "
-            "items are summarized by sessions and lessons only.",
+            "items are summarized by sessions and lessons only. owner_guidance and owner_preference lessons "
+            "are the owner's standing preferences; apply them unless current owner guidance says otherwise.",
             "sessions": clip(memory["sessions"][-20:], 300, 20),
             "lessons": clip(memory["lessons"], 600, 60),
             "skills": memory["skills"],
             "open_questions": memory["open_questions"],
+            # Standing owner preferences: follow them unless this session's guidance overrides.
+            "owner_guidance": clip(
+                [
+                    {k: g.get(k) for k in ("source", "ref", "text", "adopted", "response")}
+                    for g in memory.get("owner_guidance", [])
+                ][-20:],
+                500,
+                20,
+            ),
             "not_shown": {
                 k: len(memory[k]) - len(shown[k]) for k in ("experiments", "tables", "candidates")
             },
@@ -1913,6 +1924,10 @@ class AutonomousResearch:
             "research_memory_lessons": clip(
                 ((state.get("memory") or {}).get("lessons") or []), 400, 40
             ),
+            "owner_standing_guidance": [
+                str(g["text"])[:400]
+                for g in ((state.get("memory") or {}).get("owner_guidance") or [])[-10:]
+            ],
             "earlier_observations": [
                 self.summarize(owner, state, i, False)
                 for i in sorted(state["completed"])

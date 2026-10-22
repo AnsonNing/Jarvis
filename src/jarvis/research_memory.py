@@ -10,7 +10,9 @@ After a session ends (closed, budget exhausted, needs attention, paused or cance
   open questions, each citing evidence from that session; contradicted older lessons are
   marked superseded, never deleted;
 - skills: reproducible analysis scripts (re-run byte-identically) promoted to a versioned
-  library with usage notes.
+  library with usage notes;
+- the owner's guidance and the Director's answers, plus owner notes recorded between
+  sessions (`note`), so standing preferences carry into every later session.
 
 `snapshot(domain)` gives new sessions this memory: prior experiments (identical work is
 not repeated), prior candidates (they can be backtested again or improved), tables,
@@ -39,7 +41,15 @@ REF = re.compile(r"^sha256:[a-f0-9]{64}$")
 
 class MemoryLesson(Record):
     statement: str = Field(min_length=1, max_length=1500)
-    kind: Literal["finding", "negative_result", "method", "data_quirk", "open_question", "warning"]
+    kind: Literal[
+        "finding",
+        "negative_result",
+        "method",
+        "data_quirk",
+        "open_question",
+        "warning",
+        "owner_preference",
+    ]
     evidence_refs: tuple[Ref, ...] = Field(min_length=1, max_length=8)
     applicability: str = Field(min_length=1, max_length=600)
     confidence: Literal["low", "medium", "high"]
@@ -120,6 +130,32 @@ class KnowledgeBase:
     def consolidated(self, kb: str) -> dict[str, dict[str, Any]]:
         return {p["session"]: p for p in _payloads(self.store, kb, "SESSION_CONSOLIDATED")}
 
+    # ------------------------------------------------------------------ owner notes
+    def note(self, domain: str, text: str) -> dict[str, Any]:
+        """Record owner guidance given outside any session (e.g. in a planning conversation)."""
+        if not text.strip():
+            raise AdmissionError("empty owner note")
+        kb = self.ensure(domain)
+        ref = self.store.artifacts.put(
+            {"kind": "OwnerNote", "domain": domain, "text": text.strip()[:4000]}
+        )
+        if ref not in {p["ref"] for p in _payloads(self.store, kb, "OWNER_NOTE")}:
+            self.store.append(kb, "OWNER_NOTE", {"ref": ref})
+        return {"domain": domain, "note_ref": ref}
+
+    def owner_guidance(self, kb: str) -> list[dict[str, Any]]:
+        """Chronological owner input: session guidance (with answers) and standalone notes."""
+        items: list[dict[str, Any]] = []
+        for event in self.store.events(kb):
+            p = event["payload"]
+            if event["event_type"] == "SESSION_CONSOLIDATED":
+                facts = self.store.artifacts.get(p["facts_ref"])
+                items += [{"source": p["session"], **g} for g in facts.get("owner_guidance", [])]
+            elif event["event_type"] == "OWNER_NOTE":
+                note = self.store.artifacts.get(p["ref"])
+                items.append({"source": "owner_note", "ref": p["ref"], "text": note["text"]})
+        return items
+
     # ------------------------------------------------------------------ facts
     def facts(self, session: str) -> dict[str, Any]:
         """Trusted, LLM-free record of what the session observed and produced."""
@@ -176,6 +212,20 @@ class KnowledgeBase:
                 for q in self.store.artifacts.get(r["review_ref"])["next_questions"]
             }
         )[:12]
+        guidance = []
+        for p in _payloads(self.store, session, "GUIDANCE_RECORDED"):
+            entry = self.store.artifacts.get(p["guidance_ref"])
+            answer = state["responses"].get(p["guidance_id"])
+            guidance.append(
+                {
+                    "ref": p["guidance_ref"],
+                    "guidance_id": p["guidance_id"],
+                    "mode": entry["mode"],
+                    "text": entry["text"],
+                    "adopted": answer["adopted"] if answer else None,
+                    "response": str(answer["response"])[:600] if answer else None,
+                }
+            )
         outcome = session_outcome(self.store, session)
         stops = _payloads(self.store, session, "SESSION_STOPPED")
         return {
@@ -205,6 +255,7 @@ class KnowledgeBase:
             ],
             "finalist": outcome.get("finalist"),
             "open_questions": questions,
+            "owner_guidance": guidance,
             "usage": outcome["usage"]["actual"],
         }
 
@@ -294,14 +345,20 @@ class KnowledgeBase:
             "facts": clip(facts, 400, 60),
             "reproducible_analyses": [a for a in facts["analyses"] if a["reproducible"]],
             "existing_lessons": clip(memory["lessons"], 400, 60),
+            "owner_guidance_history": clip(memory["owner_guidance"], 400, 40),
             "existing_skills": [
                 {"name": s["name"], "version": s["version"], "description": s["description"]}
                 for s in memory["skills"]
             ],
             "instruction": "Distil what future research in this domain should remember. Lessons must cite this "
             "session's evidence. Propose skills only from reproducible analyses whose scripts would "
-            "help later sessions. Mark existing lessons that this session's evidence contradicts.",
-            "visible_evidence_ids": visible,
+            "help later sessions. Mark existing lessons that this session's evidence contradicts. "
+            "From the owner's guidance (facts.owner_guidance and owner_guidance_history) record standing "
+            "owner preferences as kind owner_preference: recurring checks, priorities, how results should "
+            "be judged and delivered; cite the guidance refs.",
+            "visible_evidence_ids": list(
+                dict.fromkeys([*visible, *[g["ref"] for g in memory["owner_guidance"]]])
+            ),
         }
 
         def check(answer: Record, frozen: dict[str, Any]) -> None:
@@ -380,6 +437,7 @@ class KnowledgeBase:
             "tables": [],
             "skills": [],
             "open_questions": [],
+            "owner_guidance": [],
         }
         if kb is None:
             return empty
@@ -440,6 +498,7 @@ class KnowledgeBase:
             "tables": list(dict.fromkeys(tables)),
             "skills": sorted(skills_by_name.values(), key=lambda s: s["name"]),
             "open_questions": list(dict.fromkeys(questions))[-20:],
+            "owner_guidance": self.owner_guidance(kb)[-40:],
         }
 
     def pin(self, domain: str) -> str:
@@ -471,13 +530,14 @@ class KnowledgeBase:
         if kb is None:
             raise AdmissionError("no knowledge for domain " + domain)
         records = list(self.consolidated(kb).values())
+        notes = [p["ref"] for p in _payloads(self.store, kb, "OWNER_NOTE")]
         artifacts, blobs = set(), set()
         stack = [
             r
             for p in records
             for r in [p["facts_ref"], p["curation_ref"], *p["lessons"], *p["skills"]]
             if r
-        ]
+        ] + notes
         while stack:
             ref = stack.pop()
             if ref in artifacts or ref in blobs:
@@ -497,7 +557,7 @@ class KnowledgeBase:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src.path(ref), dest)
         (target / "knowledge.json").write_text(
-            json.dumps({"domain": domain, "records": records}, indent=1)
+            json.dumps({"domain": domain, "records": records, "notes": notes}, indent=1)
         )
         return {
             "domain": domain,
@@ -525,6 +585,10 @@ class KnowledgeBase:
                     kb, "SESSION_CONSOLIDATED", {**record, "imported_from": str(source)}
                 )
                 added += 1
+        noted = {p["ref"] for p in _payloads(self.store, kb, "OWNER_NOTE")}
+        for ref in bundle.get("notes", []):
+            if ref not in noted:
+                self.store.append(kb, "OWNER_NOTE", {"ref": ref})
         return {"domain": bundle["domain"], "imported_sessions": added}
 
 

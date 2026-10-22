@@ -62,4 +62,6 @@ real study ran end to end. Full regression after these changes: **344 passed**.
 new sessions pin a memory snapshot, reuse remembered evidence, see bounded recall, and mount
 skills in their workbench; Dream-RSI learns from existing sessions (`development_sessions`) and
 adopts into the domain registry that `autonomy start` uses; `autonomy memory` and
-`autonomy dream` CLI commands. COMPARE and outcomes only use same-dataset observations.
+`autonomy dream` CLI commands. COMPARE and outcomes only use same-dataset observations. Owner guidance and between-session `memory note`s are remembered and shown to later
+sessions; `autonomy status` reports findings and the best result so far, `autonomy brief` lets a
+new conversation resume from the store, and [OPERATOR.md](../OPERATOR.md) guides the conversational agent.

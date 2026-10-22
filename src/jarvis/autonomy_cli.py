@@ -82,6 +82,7 @@ def add_commands(commands: Any) -> None:
     deliver.add_argument("owner")
     deliver.add_argument("directory", type=Path)
     auto.add_parser("policy-registry")
+    auto.add_parser("brief").add_argument("--domain")
     dream_cmd = auto.add_parser("dream").add_subparsers(dest="dream_op", required=True)
     dream_cmd.add_parser("start").add_argument("declaration", type=Path)
     for name in ("run", "report"):
@@ -98,6 +99,9 @@ def add_commands(commands: Any) -> None:
     export.add_argument("domain")
     export.add_argument("directory", type=Path)
     memory.add_parser("import").add_argument("directory", type=Path)
+    note = memory.add_parser("note")
+    note.add_argument("domain")
+    note.add_argument("text")
 
 
 def sandbox_check() -> dict[str, Any]:
@@ -147,34 +151,217 @@ def memory_and_policy(
 
 
 def status(store: Store, owner: str) -> dict[str, Any]:
-    from jarvis.autonomous_research import AutonomousResearch
+    """Everything an operator needs to answer "how is it going": progress, latest findings,
+    best result so far, Critic concerns, owner guidance and answers, budget, last issue."""
+    from jarvis.autonomous_research import AutonomousResearch, contract_of
+    from jarvis.autonomy_report import session_outcome
 
     engine = AutonomousResearch.__new__(AutonomousResearch)
     engine.store = store
     state = engine.state(owner)
+    spec = engine.spec(owner)
+    contract = contract_of(store, spec)
     recent = []
     for p in state["decisions"][-8:]:
-        action = store.artifacts.get(p["decision_ref"])["action"]
+        decision = store.artifacts.get(p["decision_ref"])
+        action = decision["action"]
         done = state["completed"].get(p["index"])
+        result = store.artifacts.get(done["result_ref"]) if done else {}
+        review_entry = state["reviews"].get(p["index"])
+        review = store.artifacts.get(review_entry["review_ref"]) if review_entry else None
         recent.append(
             {
                 "index": p["index"],
                 "kind": action["kind"],
                 "branch": action["branch_id"],
-                "status": store.artifacts.get(done["result_ref"]).get("status")
-                if done
-                else "RUNNING",
+                "why": str(action.get("rationale", ""))[:240],
+                "status": result.get("status") if done else "RUNNING",
+                "summary": str(result.get("summary") or "")[:400] or None,
+                "critic": {
+                    "recommendation": review["recommendation"],
+                    "concerns": [str(c)[:240] for c in review["concerns"][:3]],
+                }
+                if review
+                else None,
             }
         )
+    try:
+        outcome = session_outcome(store, owner)
+    except Exception as exc:  # status must never fail because a comparison cannot be formed
+        outcome = {"status": "UNAVAILABLE", "error": str(exc)[:200]}
+    best: dict[str, Any] = {"status": outcome["status"]}
+    if outcome["status"] == "COMPARED":
+        rows = outcome["comparison"]["rows"]
+        first = contract.acceptance_profiles[0].objectives[0].metric
+        maximize = next(m.direction for m in contract.metrics if m.name == first) == "maximize"
+        top = sorted(rows, key=lambda r: r["metrics"].get(first, 0), reverse=maximize)[:5]
+        best = {
+            "status": "COMPARED",
+            "period": outcome["comparison"]["period"],
+            "baseline_metrics": outcome["baseline_metrics"],
+            "finalist": outcome["finalist"],
+            "top_by_" + first: [
+                {
+                    "label": r["label"],
+                    "result_ref": r["result_ref"],
+                    "metrics": r["metrics"],
+                    "verdicts": {pr["profile"]: pr["verdict"] for pr in r["profiles"]},
+                }
+                for r in top
+            ],
+            "candidates_tried": outcome["candidates_tried"],
+        }
+    reviews = [store.artifacts.get(r["review_ref"]) for _, r in sorted(state["reviews"].items())]
+    issues = [
+        {"event": e["event_type"], "reason": str(e["payload"].get("reason"))[:400]}
+        for e in store.events(owner)
+        if e["event_type"]
+        in {"DIRECTOR_FAILURE", "CRITIC_FAILURE", "PROVIDER_PAUSED", "LAB_ROLE_REJECTED"}
+    ]
+    memory = state.get("memory") or {}
     return {
         "owner": owner,
+        "task": {
+            "task_id": contract.task_id,
+            "domain": contract.domain,
+            "objective": contract.objective,
+        },
         "status": store.status(owner),
         "control": store.get_control(owner),
+        "decisions": {
+            "used": len(state["decisions"]),
+            "max": spec.max_decisions,
+        },
         "plan": engine.plan(owner, state),
         "running": state["running"],
         "recent_actions": recent,
+        "best_so_far": best,
+        "open_questions": list(reviews[-1]["next_questions"]) if reviews else [],
+        "owner_guidance": [
+            {
+                "guidance_id": gid,
+                "text": str(g["text"])[:300],
+                "status": "pending" if gid in state["pending_guidance"] else "answered",
+                "adopted": (state["responses"].get(gid) or {}).get("adopted"),
+                "response": str((state["responses"].get(gid) or {}).get("response") or "")[:400]
+                or None,
+            }
+            for gid, g in state["guidance"].items()
+        ],
         "pending_guidance": state["pending_guidance"],
+        "last_issue": issues[-1] if issues else None,
+        "memory": {
+            "sessions": len(memory.get("sessions", [])),
+            "lessons": len(memory.get("lessons", [])),
+            "skills": [x["name"] for x in memory.get("skills", [])],
+            "owner_guidance": len(memory.get("owner_guidance", [])),
+        }
+        if memory
+        else None,
         "usage": store.resource_totals_tree(owner),
+        "budget": spec.budget.model_dump(mode="json"),
+    }
+
+
+def brief(store: Store, domain: str | None = None) -> dict[str, Any]:
+    """One call to resume work in a new conversation: every session, Dream round and domain
+    memory in this store, with what to do next."""
+    from jarvis.autonomy_dream import PolicyRegistry
+    from jarvis.autonomy_policy import ResearchPolicy, describe
+    from jarvis.autonomy_report import session_outcome
+    from jarvis.research_memory import KnowledgeBase, session_domain
+
+    with store.connect() as conn:
+        ids = [r[0] for r in conn.execute("SELECT id FROM campaigns")]
+    sessions, rounds, next_steps = [], [], []
+    domains: set[str] = set()
+    for cid in ids:
+        manifest = store.manifest(cid)
+        if manifest.get("kind") == "AutonomyDreamRound":
+            closed = [
+                e["payload"] for e in store.events(cid) if e["event_type"] == "DREAM_ROUND_CLOSED"
+            ]
+            rounds.append(
+                {
+                    "round": cid,
+                    "status": store.status(cid),
+                    "outcome": closed[-1] if closed else None,
+                }
+            )
+            continue
+        if manifest.get("kind") != "AutonomousResearchSession" or manifest.get("budget_owner"):
+            continue
+        name = session_domain(store, cid)
+        if domain and name != domain:
+            continue
+        domains.add(name)
+        try:
+            outcome = session_outcome(store, cid)
+        except Exception:
+            outcome = {"status": "UNAVAILABLE"}
+        stops = [e["payload"] for e in store.events(cid) if e["event_type"] == "SESSION_STOPPED"]
+        state, control = store.status(cid), store.get_control(cid)
+        sessions.append(
+            {
+                "owner": cid,
+                "domain": name,
+                "status": state,
+                "control": control,
+                "decisions": sum(e["event_type"] == "AUTONOMY_DECISION" for e in store.events(cid)),
+                "conclusion": stops[-1].get("conclusion") if stops else None,
+                "finalist": outcome.get("finalist"),
+            }
+        )
+        if control == "PAUSED":
+            next_steps.append(f"{cid}: paused; `autonomy resume {cid}` then `autonomy run {cid}`")
+        elif state in {"READY", "RUNNING"} and control != "CANCELLED":
+            next_steps.append(
+                f"{cid}: not finished; `autonomy status {cid}`, continue with `autonomy run {cid}` "
+                "(only if no other process is running it)"
+            )
+        elif state == "NEEDS_ATTENTION":
+            next_steps.append(f"{cid}: needs attention; read `autonomy status {cid}` last_issue")
+    kb = KnowledgeBase(store)
+    memory = {}
+    for name in sorted(domains | ({domain} if domain else set())):
+        snap = kb.snapshot(name)
+        lessons = sorted(snap["lessons"], key=lambda x: x["kind"] != "owner_preference")
+        policy_ref = PolicyRegistry(store).active(kb.registry(name))
+        remembered = {s["session"] for s in snap["sessions"]}
+        unremembered = [
+            s["owner"]
+            for s in sessions
+            if s["domain"] == name
+            and s["owner"] not in remembered
+            and (
+                s["status"] in {"CLOSED", "BUDGET_EXHAUSTED", "NEEDS_ATTENTION"}
+                or s["control"] == "PAUSED"
+            )
+        ]
+        if unremembered:
+            next_steps.append(
+                f"{name}: {len(unremembered)} ended session(s) not in memory; `autonomy memory consolidate`"
+            )
+        memory[name] = {
+            "sessions_remembered": len(snap["sessions"]),
+            "lessons": [f"[{x['kind']}] {x['statement'][:300]}" for x in lessons[:25]],
+            "owner_guidance": [str(g["text"])[:300] for g in snap["owner_guidance"][-15:]],
+            "skills": [
+                f"{s['name']} v{s['version']}: {s['description'][:160]}" for s in snap["skills"]
+            ],
+            "experiments": len(snap["experiments"]),
+            "open_questions": snap["open_questions"][-8:],
+            "active_policy": describe(
+                ResearchPolicy.model_validate(store.artifacts.get(policy_ref))
+            ),
+            "not_in_memory": unremembered,
+        }
+    return {
+        "store": str(store.root),
+        "sessions": sessions,
+        "dream_rounds": rounds,
+        "memory": memory,
+        "next_steps": next_steps,
     }
 
 
@@ -403,7 +590,14 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             return {"results": kb.consolidate_store(provider_factory=factory, config=config)}
         if args.memory_op == "export":
             return kb.export(args.domain, args.directory)
+        if args.memory_op == "note":
+            return {
+                **kb.note(args.domain, args.text),
+                "note": "Standing owner guidance; every later session in this domain sees it.",
+            }
         return kb.import_bundle(args.directory)
+    if op == "brief":
+        return brief(store, args.domain)
     if op == "policy-registry":
         from jarvis.autonomy_dream import PolicyRegistry
 

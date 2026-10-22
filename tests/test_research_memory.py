@@ -43,7 +43,9 @@ def provider(cfg, role):
     return QuantFixtureProvider(role)
 
 
-def research(store, root, *, memory=True, policy_ref=None, seed=11, family="balanced"):
+def research(
+    store, root, *, memory=True, policy_ref=None, seed=11, family="balanced", guidance=None
+):
     """One finished session that starts from (and writes back to) the domain memory."""
     world = build_world(store, root, seed=seed, family=family, per_day=40)
     engine = AutonomousResearch(store, world_executors(world), provider, consolidate=True)
@@ -57,6 +59,8 @@ def research(store, root, *, memory=True, policy_ref=None, seed=11, family="bala
             max_concurrent_actions=1,
         )
     )
+    if guidance:
+        engine.advise(owner, guidance)
     result = engine.run(owner, wall_seconds=600)
     return owner, result, domain
 
@@ -221,3 +225,95 @@ def test_cli_sessions_start_from_memory_and_adopted_policy(tmp_path):
     out = tmp_path / "export"
     assert call("memory", "export", "synthetic-quant-world", str(out))["sessions"] == 1
     assert Path(out / "knowledge.json").is_file()
+
+
+def director_contexts(store, owner):
+    return [
+        store.artifacts.get(e["payload"]["context_ref"])
+        for e in store.events(owner)
+        if e["event_type"] == "LAB_ROLE_REQUESTED" and e["payload"]["key"].startswith("decision:")
+    ]
+
+
+def test_owner_guidance_and_notes_carry_into_later_sessions(tmp_path):
+    store = Store(tmp_path / "store")
+    advice = "Check deployability of every candidate before recommending it."
+    first, result, domain = research(store, tmp_path / "w1", guidance=advice)
+    assert result["status"] == "CLOSED"
+    kb = KnowledgeBase(store)
+    remembered = kb.snapshot(domain)["owner_guidance"]
+    assert remembered[0]["text"] == advice and remembered[0]["source"] == first
+    assert remembered[0]["adopted"] is not None and remembered[0]["response"]
+    preferences = [x for x in kb.snapshot(domain)["lessons"] if x["kind"] == "owner_preference"]
+    assert preferences and advice in preferences[0]["statement"]
+    # Guidance given between sessions (e.g. in a planning conversation) is kept too.
+    note = "Prefer more trades as long as mean PR holds."
+    assert kb.note(domain, note)["note_ref"] == kb.note(domain, note)["note_ref"]
+    assert [g["text"] for g in kb.snapshot(domain)["owner_guidance"]] == [advice, note]
+
+    second, result, _ = research(store, tmp_path / "w2", seed=12)
+    assert result["status"] == "CLOSED"
+    context = director_contexts(store, second)[0]
+    shown = [g["text"] for g in context["research_memory"]["owner_guidance"]]
+    assert shown == [advice, note]
+    assert all(
+        g["ref"] in context["visible_evidence_ids"]
+        for g in context["research_memory"]["owner_guidance"]
+    )
+    critic = [
+        store.artifacts.get(e["payload"]["context_ref"])
+        for e in store.events(second)
+        if e["event_type"] == "LAB_ROLE_REQUESTED" and e["payload"]["key"].startswith("review:")
+    ]
+    assert critic and critic[0]["owner_standing_guidance"] == [advice, note]
+    # Notes travel with exported knowledge.
+    target = KnowledgeBase(Store(tmp_path / "b"))
+    kb.export(domain, tmp_path / "bundle")
+    target.import_bundle(tmp_path / "bundle")
+    assert note in [g["text"] for g in target.snapshot(domain)["owner_guidance"]]
+
+
+def test_status_and_brief_let_a_new_conversation_resume(tmp_path):
+    from jarvis.cli import parser, run
+
+    store = tmp_path / "store"
+
+    def call(*args):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            run(parser().parse_args(["--store", str(store), "autonomy", *args]))
+        return json.loads(buffer.getvalue())
+
+    def declaration(name, seed):
+        path = tmp_path / f"{name}.yaml"
+        path.write_text(
+            "adapter: jarvis.quant_world:declared_world\n"
+            f"adapter_args: {{root: {json.dumps(str(tmp_path / name))}, seed: {seed}}}\n"
+            "agent: fixture\nmax_decisions: 30\nmax_concurrent_actions: 1\n"
+        )
+        return str(path)
+
+    done = call("start", declaration("w1", 11))["owner"]
+    call("advise", done, "Keep the analysis simple first.")
+    call("run", done, "--wall-seconds", "600")
+    status = call("status", done)
+    assert status["status"] == "CLOSED" and status["task"]["domain"] == "synthetic-quant-world"
+    assert status["best_so_far"]["status"] == "COMPARED"
+    assert status["best_so_far"]["finalist"]["status"] == "SELECTED"
+    assert status["recent_actions"][-1]["kind"] == "STOP" and status["recent_actions"][-1]["why"]
+    assert status["owner_guidance"][0]["status"] == "answered"
+    assert status["owner_guidance"][0]["response"]
+
+    waiting = call("start", declaration("w2", 12))["owner"]
+    call("memory", "note", "synthetic-quant-world", "Look at each model separately first.")
+    brief = call("brief")
+    assert {s["owner"] for s in brief["sessions"]} == {done, waiting}
+    assert any(waiting in step for step in brief["next_steps"])
+    memory = brief["memory"]["synthetic-quant-world"]
+    assert memory["sessions_remembered"] == 1 and memory["not_in_memory"] == []
+    assert memory["owner_guidance"] == [
+        "Keep the analysis simple first.",
+        "Look at each model separately first.",
+    ]
+    assert memory["active_policy"]["name"]
+    assert call("brief", "--domain", "other")["sessions"] == []

@@ -94,4 +94,4 @@ Dream-RSI 改善的是「選擇研究動作的政策 Q」：開發 session → �
 
 目前以合成 Hermes-like 世界端到端驗證（只調 bp 約 +3%，重訓約 +8%，regime-aware 規則約 +14%，規則加重訓約 +22%），沒有啟動真實 Hermes 研究。詳見 [P16 文件](../implementation/P16-autonomous-research.md)。
 
-**研究記憶與技能累積（P18）**：每個 session 結束（含暫停、預算用完）時，自動寫入該 domain 的知識庫：可信事實（實驗、候選、表格、分支結論）、curator 整理並附證據的 lessons、以及從可重現分析升級的版本化 skills。新的 session 從釘選的記憶快照開始：沿用過去的實驗與候選、看得到 lessons 與結論、分析工作區自動掛載 `skills/`。Dream-RSI 可以直接從已完成的真實 session 學習，採用的政策寫入 domain 的政策 registry，之後每個 session 自動使用。詳見 [P18 文件](../implementation/P18-research-memory.md)。
+**研究記憶與技能累積（P18）**：每個 session 結束（含暫停、預算用完）時，自動寫入該 domain 的知識庫：可信事實（實驗、候選、表格、分支結論）、curator 整理並附證據的 lessons、以及從可重現分析升級的版本化 skills。新的 session 從釘選的記憶快照開始：沿用過去的實驗與候選、看得到 lessons 與結論、分析工作區自動掛載 `skills/`。Dream-RSI 可以直接從已完成的真實 session 學習，採用的政策寫入 domain 的政策 registry，之後每個 session 自動使用。你在任何 session 給的建議、Director 的回應，以及 session 之間用 `memory note` 記下的想法，都會成為之後每個 session 的長期偏好。新開的 Claude/Codex 對話先執行 `autonomy brief` 就能接續先前所有進度（見 [OPERATOR.md](../OPERATOR.md)）。詳見 [P18 文件](../implementation/P18-research-memory.md)。

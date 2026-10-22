@@ -702,6 +702,16 @@ class QuantFixtureProvider:
                         "inputs": "one trades CSV with regime, filled, adverse_move_bp, model_cancel, outcome_pl_bp",
                     }
                 )
+        for g in facts.get("owner_guidance", [])[:2]:
+            lessons.append(
+                {
+                    "statement": "Owner preference: " + g["text"][:300],
+                    "kind": "owner_preference",
+                    "evidence_refs": [g["ref"]],
+                    "applicability": "every later session in this domain",
+                    "confidence": "high",
+                }
+            )
         for failed in facts.get("failed_actions", [])[:1]:
             lessons.append(
                 {

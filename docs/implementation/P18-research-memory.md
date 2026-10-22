@@ -70,6 +70,25 @@ jarvis --store S autonomy dream report ROUND
 Use one store per domain so that sessions, memory and the policy registry stay together; export
 and import move knowledge between stores.
 
+## Owner guidance and resuming in a new conversation
+
+The owner works with Jarvis through whatever conversation started it (Claude Code, Codex or a
+shell). Nothing said there should be lost when that conversation or the session ends:
+
+- every `advise` item and the Director's answer are part of the session facts; the Curator turns
+  recurring guidance into `owner_preference` lessons;
+- `autonomy memory note DOMAIN TEXT` records guidance given while no session runs;
+- new sessions show the standing guidance to the Director (`research_memory.owner_guidance`,
+  citable refs) and the Critic (`owner_standing_guidance`); current guidance overrides it;
+- `autonomy status OWNER` reports the plan, recent actions with their reasons and Critic verdicts,
+  the best result so far with profile verdicts, open questions, guidance with answers, the last
+  issue and budget;
+- `autonomy brief [--domain D]` gives a new conversation the whole store: sessions, Dream rounds,
+  per-domain lessons, guidance, skills, active policy, sessions not yet remembered and next steps.
+
+[OPERATOR.md](../OPERATOR.md) tells the conversational agent how to use these commands; `AGENTS.md`
+and `CLAUDE.md` point to it.
+
 ## Verification
 
 `tests/test_research_memory.py` (synthetic world, scripted roles):
@@ -80,13 +99,15 @@ and import move knowledge between stores.
 - export/import reproduces lessons and skills, including skill files;
 - Dream learns from two remembered sessions, adopts into the domain registry, and the next
   session runs with the adopted policy;
-- CLI sessions start from the pinned memory and the registry's active policy.
+- CLI sessions start from the pinned memory and the registry's active policy;
+- owner guidance and notes reach the next session's Director and Critic and survive export/import;
+- `status` and `brief` report outcomes, guidance answers, unfinished sessions and memory.
 
 Found and fixed while testing: remembered experiments counted against this session's enumeration
 limit; remembered experiments from another dataset entered COMPARE and the outcome; remembered
 tables made role contexts grow with history.
 
-Full regression after these changes: **350 passed**; Ruff and mypy pass.
+Full regression after these changes: **352 passed**; Ruff and mypy pass.
 
 ## Not claimed
 

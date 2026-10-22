@@ -41,3 +41,10 @@ Actual trading strategies, BTC/other market data parsing, feature formulas, mode
 ## Codex starting task
 
 Follow docs/11_CODEX_EXECUTION.md. The first milestone is a working CLI-driven synthetic research campaign that can resume after interruption, record a valid discovery tree, store both positive and negative evidence, and output a report **without** an external training/backtest system. The fixed Q0 exploration policy and Replay-compatible event shape must exist immediately. Report real test evidence and any deviations from the design.
+
+## Operating research sessions for an owner
+
+When a conversation asks you to start, steer or report on Jarvis research (not to change Jarvis
+code), follow [docs/OPERATOR.md](docs/OPERATOR.md): begin with `jarvis autonomy brief`, answer from
+`status`/`report`/`deliverable`, record the owner's ideas with `advise` or `memory note`, and run
+sessions in the background.

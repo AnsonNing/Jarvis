@@ -89,7 +89,9 @@ AUTONOMY_ROLE_PROMPTS = {
         + "Write lessons that change future decisions: confirmed findings with numbers, negative results worth not "
         "repeating, effective methods, data quirks and open questions. Cite this session's evidence. Promote a "
         "skill only from a reproducible analysis whose scripts are reusable, with clear usage and inputs. Mark "
-        "existing lessons superseded only when this session's evidence contradicts them."
+        "existing lessons superseded only when this session's evidence contradicts them. Record the owner's standing "
+        "preferences (recurring checks, priorities, how results are judged and delivered) as owner_preference "
+        "lessons citing the owner's guidance."
     ),
     "autonomy_policy": (
         "You are the research-policy developer of a Dream-RSI loop. "
