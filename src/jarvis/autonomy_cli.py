@@ -82,6 +82,22 @@ def add_commands(commands: Any) -> None:
     deliver.add_argument("owner")
     deliver.add_argument("directory", type=Path)
     auto.add_parser("policy-registry")
+    dream_cmd = auto.add_parser("dream").add_subparsers(dest="dream_op", required=True)
+    dream_cmd.add_parser("start").add_argument("declaration", type=Path)
+    for name in ("run", "report"):
+        dream_cmd.add_parser(name).add_argument("round")
+    memory = auto.add_parser("memory").add_subparsers(dest="memory_op", required=True)
+    show = memory.add_parser("show")
+    show.add_argument("domain")
+    consolidate = memory.add_parser("consolidate")
+    consolidate.add_argument(
+        "--agent", choices=["fixture", "codex", "claude", "relay", "none"], default="codex"
+    )
+    consolidate.add_argument("--session")
+    export = memory.add_parser("export")
+    export.add_argument("domain")
+    export.add_argument("directory", type=Path)
+    memory.add_parser("import").add_argument("directory", type=Path)
 
 
 def sandbox_check() -> dict[str, Any]:
@@ -113,7 +129,21 @@ def engine_for(store: Store, declaration: dict[str, Any]) -> tuple[Any, dict[str
     built = load_adapter(declaration)(store, declaration.get("adapter_args", {}))
     agent = declaration.get("agent", "codex")
     factory = provider_factory(agent, relay=store.root / "relay")
-    return AutonomousResearch(store, built["executors"], factory), built
+    remember = bool(declaration.get("memory", True))
+    return AutonomousResearch(store, built["executors"], factory, consolidate=remember), built
+
+
+def memory_and_policy(
+    store: Store, contract_ref: str, *, memory: bool = True
+) -> tuple[str | None, str]:
+    """Every new session starts from the domain's memory and its currently adopted policy."""
+    from jarvis.autonomy_dream import PolicyRegistry
+    from jarvis.research_memory import KnowledgeBase
+
+    domain = store.artifacts.get(contract_ref)["domain"]
+    kb = KnowledgeBase(store)
+    policy = PolicyRegistry(store).active(kb.registry(domain))
+    return (kb.pin(domain) if memory else None), policy
 
 
 def status(store: Store, owner: str) -> dict[str, Any]:
@@ -180,11 +210,14 @@ def run_fixture(store: Store, args: argparse.Namespace) -> dict[str, Any]:
         store,
         world_executors(world),
         provider_factory(args.agent, eager_stop=args.eager_stop, relay=store.root / "relay"),
+        consolidate=True,
     )
+    memory_ref, active_policy = memory_and_policy(store, world["contract_ref"])
     owner = engine.create(
         AutonomySessionSpec(
             contract_ref=world["contract_ref"],
-            policy_ref=policy_ref,
+            memory_ref=memory_ref,
+            policy_ref=policy_ref or active_policy,
             max_decisions=args.max_decisions,
             max_concurrent_actions=1 if args.agent == "fixture" else 2,
             role_config={
@@ -262,6 +295,74 @@ def run_dream_fixture(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def dream_engine(store: Store, declaration: dict[str, Any]) -> Any:
+    import sys
+
+    from jarvis.autonomy_dream import AutonomyDream
+
+    if declaration.get("adapter_path"):
+        sys.path.insert(0, str(Path(declaration["adapter_path"]).resolve()))
+    module, _, name = str(declaration["task_factory"]).partition(":")
+    factory = getattr(importlib.import_module(module), name)(**declaration.get("factory_args", {}))
+    agent = declaration.get("agent", "codex")
+    return AutonomyDream(store, factory, provider_factory(agent, relay=store.root / "relay"))
+
+
+def run_dream(store: Store, args: argparse.Namespace) -> dict[str, Any]:
+    """Dream-RSI on a domain: learns from finished sessions, validates on fresh tasks,
+    and adopts into the domain policy registry that every later session starts from."""
+    from jarvis.autonomy_dream import AutonomyDreamSpec, dream_report
+    from jarvis.research_memory import KnowledgeBase, session_domain
+
+    if args.dream_op == "start":
+        declaration = yaml.safe_load(args.declaration.read_text())
+        kb = KnowledgeBase(store)
+        domain = declaration["domain"]
+        sessions = declaration.get("development_sessions", "memory")
+        if sessions == "memory":
+            sessions = [
+                s["session"]
+                for s in kb.snapshot(domain)["sessions"]
+                if s["status"] in {"CLOSED", "BUDGET_EXHAUSTED", "NEEDS_ATTENTION"}
+            ]
+        sessions = [s for s in sessions if session_domain(store, s) == domain]
+        spec = AutonomyDreamSpec.model_validate(
+            {
+                "registry": kb.registry(domain),
+                "development": declaration.get("development", []),
+                "development_sessions": sessions,
+                "validation": declaration["validation"],
+                "canary": declaration["canary"],
+                "session_max_decisions": int(declaration.get("session_max_decisions", 30)),
+                **{
+                    k: declaration[k]
+                    for k in ("session_budget", "developer", "min_mean_gain")
+                    if k in declaration
+                },
+            }
+        )
+        dream = dream_engine(store, declaration)
+        round_id = dream.create(spec)
+        store.append(
+            round_id, "DECLARATION_RECORDED", {"declaration_ref": store.artifacts.put(declaration)}
+        )
+        return {
+            "round": round_id,
+            "development_sessions": len(sessions),
+            "registry": spec.registry,
+            "note": "Declared only; `autonomy dream run ROUND` executes validation sessions (LLM + backtests).",
+        }
+    declared = [
+        e["payload"] for e in store.events(args.round) if e["event_type"] == "DECLARATION_RECORDED"
+    ]
+    if args.dream_op == "run":
+        if not declared:
+            raise AdmissionError("round has no recorded declaration")
+        dream = dream_engine(store, store.artifacts.get(declared[0]["declaration_ref"]))
+        return {"round": args.round, **dream.run(args.round)}
+    return dream_report(store, args.round)
+
+
 def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     from jarvis.autonomy_report import deliverable, replay_session, verify_session
 
@@ -270,6 +371,39 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
         return run_fixture(store, args)
     if op == "dream-fixture":
         return run_dream_fixture(store, args)
+    if op == "dream":
+        return run_dream(store, args)
+    if op == "memory":
+        from jarvis.research_memory import KnowledgeBase
+
+        kb = KnowledgeBase(store)
+        if args.memory_op == "show":
+            snap = kb.snapshot(args.domain)
+            return {
+                **{k: len(v) if isinstance(v, list) else v for k, v in snap.items()},
+                "lessons_text": [x["statement"] for x in snap["lessons"]],
+                "skills": snap["skills"],
+                "registry": kb.registry(args.domain),
+            }
+        if args.memory_op == "consolidate":
+            factory = (
+                None
+                if args.agent == "none"
+                else provider_factory(args.agent, relay=store.root / "relay")
+            )
+            config = AgentConfig(
+                model="gpt-6.1-sol",
+                reasoning_effort="medium",
+                max_calls=4000,
+                reserve_tokens=120000,
+                timeout_seconds=900,
+            )
+            if args.session:
+                return kb.consolidate(args.session, provider_factory=factory, config=config)
+            return {"results": kb.consolidate_store(provider_factory=factory, config=config)}
+        if args.memory_op == "export":
+            return kb.export(args.domain, args.directory)
+        return kb.import_bundle(args.directory)
     if op == "policy-registry":
         from jarvis.autonomy_dream import PolicyRegistry
 
@@ -277,12 +411,15 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
     if op == "start":
         declaration = yaml.safe_load(args.declaration.read_text())
         engine, built = engine_for(store, declaration)
-        policy_ref = None
+        memory_ref, policy_ref = memory_and_policy(
+            store, built["contract_ref"], memory=bool(declaration.get("memory", True))
+        )
         if declaration.get("policy_registry"):
             from jarvis.autonomy_dream import PolicyRegistry
 
             policy_ref = PolicyRegistry(store).active(declaration["policy_registry"])
         spec = AutonomySessionSpec(
+            memory_ref=memory_ref,
             contract_ref=built["contract_ref"],
             input_refs=tuple(built.get("input_refs", ())),
             policy_ref=policy_ref,
@@ -302,6 +439,8 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             "status": store.status(owner),
             "decisions": 0,
             "note": "Declared only; use `autonomy run` to start research.",
+            "memory_ref": memory_ref,
+            "policy_ref": policy_ref,
         }
     owner = args.owner
     if op == "run":

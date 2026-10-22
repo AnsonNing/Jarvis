@@ -45,7 +45,10 @@ class DreamTask(Record):
 class AutonomyDreamSpec(Record):
     kind: Literal["AutonomyDreamSpec"] = "AutonomyDreamSpec"
     registry: str = Field(min_length=1)
-    development: tuple[DreamTask, ...] = Field(min_length=1, max_length=8)
+    development: tuple[DreamTask, ...] = Field(default=(), max_length=8)
+    # Learn from research that already happened (real sessions in this store) instead of,
+    # or in addition to, fresh development tasks.
+    development_sessions: tuple[str, ...] = Field(default=(), max_length=64)
     validation: tuple[DreamTask, ...] = Field(min_length=1, max_length=8)
     canary: tuple[DreamTask, ...] = Field(min_length=1, max_length=4)
     session_max_decisions: int = Field(default=30, ge=4, le=500)
@@ -69,6 +72,8 @@ class AutonomyDreamSpec(Record):
 
     @model_validator(mode="after")
     def disjoint(self) -> "AutonomyDreamSpec":
+        if not self.development and not self.development_sessions:
+            raise ValueError("Dream needs development tasks or existing development sessions")
         groups = [self.development, self.validation, self.canary]
         ids = [t.task_id for g in groups for t in g]
         seeds = [(t.family, t.seed) for g in groups for t in g]
@@ -291,6 +296,30 @@ class AutonomyDream:
         )
         return value
 
+    def _existing(self, session: str) -> dict[str, Any]:
+        """A finished real session as a development history (no holdout is claimed)."""
+        if self.store.manifest(session).get("kind") != "AutonomousResearchSession":
+            raise AdmissionError("development sessions must be autonomous research sessions")
+        if self.store.status(session) not in {"CLOSED", "BUDGET_EXHAUSTED", "NEEDS_ATTENTION"}:
+            raise AdmissionError("development sessions must have finished")
+        verify_session(self.store, session)
+        outcome = session_outcome(self.store, session)
+        return {
+            "cohort": "development",
+            "task_id": self.store.artifacts.get(
+                self.store.manifest(session)["spec"]["contract_ref"]
+            )["task_id"],
+            "policy_ref": self.store.manifest(session)["spec"].get("policy_ref"),
+            "session": session,
+            "development_gain": self._dev_gain(outcome)
+            if outcome["status"] == "COMPARED"
+            else None,
+            "decisions": outcome["decisions"],
+            "usage": outcome["usage"]["actual"],
+            "utility": None,
+            "source": "existing session",
+        }
+
     @staticmethod
     def _dev_gain(outcome: dict[str, Any]) -> float | None:
         finalist = outcome.get("finalist", {})
@@ -347,8 +376,18 @@ class AutonomyDream:
         if recorded:
             return list(recorded[0]["candidate_refs"])
         spec = self.spec(round_id)
+        from jarvis.research_memory import KnowledgeBase, session_domain
+
+        pool = self.store.artifacts.get(pool_ref)
+        domains = {session_domain(self.store, s["session"]) for s in pool["sessions"]}
+        lessons = [
+            x for d in sorted(domains) for x in KnowledgeBase(self.store).snapshot(d)["lessons"]
+        ]
         context = {
-            "development_summary": self.store.artifacts.get(pool_ref),
+            "research_memory_lessons": [
+                {k: x[k] for k in ("statement", "kind", "confidence")} for x in lessons
+            ][:60],
+            "development_summary": pool,
             "incumbent_policy": self.store.artifacts.get(incumbent_ref),
             "policy_language": ResearchPolicy.model_json_schema(),
             "boundary": "Propose research-method rules only; no strategy parameters, evaluator, data or held-out results.",
@@ -467,6 +506,7 @@ class AutonomyDream:
             if self.registry.active(spec.registry) != incumbent:
                 raise IntegrityError("registry changed since this round was declared")
             dev = [self._session(round_id, "development", t, incumbent) for t in spec.development]
+            dev += [self._existing(s) for s in spec.development_sessions]
             pool = self._history_pool(round_id, dev)
             candidates = self._propose(round_id, pool, incumbent)
             screens = _payloads(self.store, round_id, "POLICY_SCREEN_RECORDED")
@@ -588,7 +628,9 @@ def dream_report(store: Store, round_id: str) -> dict[str, Any]:
         for e in events
         if e["event_type"] == "LAB_ROLE_REQUESTED"
     ]
-    dev_sessions = {o["session"] for o in outcomes if o["cohort"] == "development"}
+    dev_sessions = {o["session"] for o in outcomes if o["cohort"] == "development"} | set(
+        spec.development_sessions
+    )
     for context in developer_contexts:
         seen = {s["session"] for s in context["development_summary"]["sessions"]}
         if not seen <= dev_sessions:

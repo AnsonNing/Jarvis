@@ -64,6 +64,11 @@ MAX_CONSECUTIVE_FAILURES = 3
 SOURCE_LIMIT = 60000
 
 
+MEMORY_SHOWN = {
+    "experiments": 40,
+    "tables": 40,
+    "candidates": 20,
+}  # recalled items per role context
 CONTEXT_BUDGET = 90000  # characters of Director context JSON before older detail is compacted
 
 
@@ -189,11 +194,15 @@ class AutonomousResearch:
         provider_factory: Callable[[AgentConfig, str], Any],
         *,
         runner: ActionRunner | None = None,
+        consolidate: bool = False,
     ):
+        """`consolidate=True`: every run that ends (closed, budget, attention, pause, cancel)
+        is written into the domain knowledge base so later sessions are affected."""
         self.store = store
         self.executors = executors
         self.provider_factory = provider_factory
         self.runner = runner or ActionRunner()
+        self.consolidate = consolidate
 
     # ------------------------------------------------------------------ creation
     def create(self, spec: AutonomySessionSpec, *, budget_owner: str | None = None) -> str:
@@ -237,6 +246,9 @@ class AutonomousResearch:
                 **({"budget_owner": budget_owner} if budget_owner else {}),
             }
         )
+
+    def memory(self, spec: AutonomySessionSpec) -> dict[str, Any] | None:
+        return self.store.artifacts.get(spec.memory_ref) if spec.memory_ref else None
 
     def spec(self, owner: str) -> AutonomySessionSpec:
         return AutonomySessionSpec.model_validate(self.store.manifest(owner)["spec"])
@@ -328,6 +340,22 @@ class AutonomousResearch:
                 if p["branch_id"] in state["branches"]:
                     state["branches"][p["branch_id"]]["status"] = "closed"
                     state["branches"][p["branch_id"]]["closure"] = p
+        memory = self.memory(spec)
+        if memory:
+            state["candidates"] = list(dict.fromkeys([*state["candidates"], *memory["candidates"]]))
+            state["tables"] = list(dict.fromkeys([*memory["tables"], *state["tables"]]))
+            state["observations"] = list(
+                dict.fromkeys([*memory["experiments"], *state["observations"]])
+            )
+            visible[1:1] = [
+                str(spec.memory_ref),
+                *[x["ref"] for x in memory["lessons"]],
+                *[x["ref"] for x in memory["skills"]],
+                *memory["candidates"],
+                *memory["tables"],
+                *memory["experiments"],
+            ]
+        state["memory"] = memory
         state["visible"] = list(dict.fromkeys(visible))
         state["running"] = [i for i in state["launched"] if i not in state["completed"]]
         state["pending_guidance"] = [g for g in state["guidance"] if g not in state["responses"]]
@@ -360,7 +388,11 @@ class AutonomousResearch:
         unexplained: list[str] = []
         input_shift = False
         values: dict[str, set[str]] = {}
+        # Policy rules judge this session's own actions; remembered experiments are reused evidence.
+        remembered = set((state.get("memory") or {}).get("experiments", []))
         for ref in state["observations"]:
+            if ref in remembered:
+                continue
             obs = self.store.artifacts.get(ref)
             for name, value in obs["changes"].items():
                 values.setdefault(name, set()).add(repr(value))
@@ -388,6 +420,21 @@ class AutonomousResearch:
             "unexplained_gains": unexplained,
             "input_shifting_gain": input_shift,
             "trainer_available": self.executors.trainer is not None,
+            # Earlier sessions that already trained models or closed a model branch count.
+            "model_research_in_memory": bool(
+                state.get("memory")
+                and (
+                    any(
+                        self.store.artifacts.get(c)["origin"] == "agent_trained"
+                        for c in state["memory"]["candidates"]
+                    )
+                    or any(
+                        b.get("kind") == "model"
+                        for sess in state["memory"]["sessions"]
+                        for b in sess.get("branch_closures", [])
+                    )
+                )
+            ),
             "setting_values": {k: sorted(v) for k, v in values.items()},
         }
 
@@ -480,6 +527,8 @@ class AutonomousResearch:
         recent = set(completed[-window:])
         latest = completed[-1] if completed else None
         resources = self.store.resource_totals_tree(owner)
+        shown = self._memory_shown(contract, state)
+        hidden = set(shown["all"]) - set(shown["refs"])
         return {
             "research_contract": contract.model_dump(mode="json"),
             "contract_ref": spec.contract_ref,
@@ -492,9 +541,29 @@ class AutonomousResearch:
                 {"ref": r, "value": self.store.artifacts.get(r)} for r in spec.prior_evidence_refs
             ],
             "research_plan": self.plan(owner, state),
-            "candidates": [{"ref": r, **self._candidate_summary(r)} for r in state["candidates"]],
-            "experiment_ledger": [self._experiment_row(r) for r in state["observations"]],
-            "tables": [self._table_summary(r) for r in state["tables"]],
+            "candidates": [
+                {"ref": r, **self._candidate_summary(r), "from_memory": r in shown["candidates"]}
+                for r in state["candidates"]
+                if r not in hidden
+            ],
+            "experiment_ledger": [
+                {
+                    **self._experiment_row(r),
+                    "from_memory": r in shown["experiments"],
+                    # Only same-evaluator, same-dataset rows can enter a COMPARE with this contract.
+                    "comparable": self._comparable(contract, r),
+                }
+                for r in state["observations"]
+                if r not in hidden
+            ],
+            "research_memory": self._memory_view(state, shown),
+            "tables": [
+                {**self._table_summary(r, compact=True), "from_memory": True}
+                if r in shown["tables"]
+                else self._table_summary(r)
+                for r in state["tables"]
+                if r not in hidden
+            ],
             "code_patches": [
                 {"ref": r, "target": self.store.artifacts.get(r)["target"]}
                 for r in state["patches"]
@@ -537,8 +606,62 @@ class AutonomousResearch:
                 "max_decisions": spec.max_decisions,
             },
             "stop_rule": "A session STOP must close every open branch with evidence; research_complete requires a compared finalist. Running actions must finish first.",
-            "visible_evidence_ids": state["visible"],
+            "visible_evidence_ids": [r for r in state["visible"] if r not in hidden],
         }
+
+    def _memory_shown(self, contract: AutonomyContract, state: dict[str, Any]) -> dict[str, Any]:
+        """Bounded recall: the latest same-dataset experiments with their tables and candidates.
+
+        Older or other-dataset items stay valid evidence but are summarized by sessions/lessons,
+        so role contexts do not grow with the number of remembered sessions."""
+        memory = state.get("memory") or {}
+        if not memory:
+            return {"experiments": [], "tables": [], "candidates": [], "refs": [], "all": []}
+        cap = MEMORY_SHOWN
+        experiments = [r for r in memory["experiments"] if self._comparable(contract, r)][
+            -cap["experiments"] :
+        ]
+        values = [self.store.artifacts.get(r) for r in experiments]
+        attached = [t for o in values for t in o["tables"].values() if t in memory["tables"]]
+        tables = list(dict.fromkeys([*attached, *memory["tables"][::-1]]))[: cap["tables"]]
+        used = [o["candidate_ref"] for o in values if o["candidate_ref"] in memory["candidates"]]
+        candidates = list(dict.fromkeys([*used, *memory["candidates"][::-1]]))[
+            : max(cap["candidates"], len(set(used)))
+        ]
+        listed = [*memory["experiments"], *memory["tables"], *memory["candidates"]]
+        return {
+            "experiments": experiments,
+            "tables": tables,
+            "candidates": candidates,
+            "refs": [*experiments, *tables, *candidates],
+            "all": listed,
+        }
+
+    @staticmethod
+    def _memory_view(state: dict[str, Any], shown: dict[str, Any]) -> dict[str, Any] | None:
+        memory = state.get("memory")
+        if not memory:
+            return None
+        return {
+            "note": "Earlier sessions in this domain. Their latest same-dataset experiments are in "
+            "experiment_ledger (from_memory) and are not repeated; their candidates and tables can be used "
+            "directly; skills are mounted under skills/ in every analysis workspace. Older or other-dataset "
+            "items are summarized by sessions and lessons only.",
+            "sessions": clip(memory["sessions"][-20:], 300, 20),
+            "lessons": clip(memory["lessons"], 600, 60),
+            "skills": memory["skills"],
+            "open_questions": memory["open_questions"],
+            "not_shown": {
+                k: len(memory[k]) - len(shown[k]) for k in ("experiments", "tables", "candidates")
+            },
+        }
+
+    def _comparable(self, contract: AutonomyContract, ref: str) -> bool:
+        o = self.store.artifacts.get(ref)
+        return bool(
+            o.get("evaluator_id") == contract.evaluator_id
+            and o.get("dataset_id") == contract.dataset_id
+        )
 
     def _experiment_row(self, ref: str) -> dict[str, Any]:
         """Every backtest stays visible compactly, however long the session gets."""
@@ -557,15 +680,15 @@ class AutonomousResearch:
             "provenance": provenance_summary(o),
         }
 
-    def _table_summary(self, ref: str) -> dict[str, Any]:
+    def _table_summary(self, ref: str, *, compact: bool = False) -> dict[str, Any]:
         t = self.store.artifacts.get(ref)
         lineage = t["lineage"]
         return {
             "ref": ref,
             "name": t["name"],
             "rows": t["rows"],
-            "columns": list(t["columns"][:60]),
-            "description": t["description"][:240],
+            **({} if compact else {"columns": list(t["columns"][:60])}),
+            "description": t["description"][: 120 if compact else 240],
             "lineage": {
                 k: lineage[k]
                 for k in ("action_index", "experiment", "candidate_ref", "period", "kind", "origin")
@@ -723,6 +846,11 @@ class AutonomousResearch:
                 raise ValueError("only succeeded observations can be compared")
             if len({self.store.artifacts.get(r)["period"] for r in refs}) != 1:
                 raise ValueError("compared observations must share one period")
+            if not all(self._comparable(contract, r) for r in refs):
+                raise ValueError(
+                    "compared observations must use this contract's evaluator and dataset "
+                    "(experiment_ledger.comparable)"
+                )
         elif isinstance(action, WaitAction):
             if not state["running"]:
                 raise ValueError("WAIT requires a running action")
@@ -1138,6 +1266,34 @@ class AutonomousResearch:
         assert isinstance(action, ImplementAction)
         return self._implement(owner, child, index, action)
 
+    def _skill_files(
+        self, spec: AutonomySessionSpec
+    ) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
+        memory = self.memory(spec)
+        files: dict[str, bytes] = {}
+        manifest = []
+        for entry in (memory or {}).get("skills", []):
+            skill = self.store.artifacts.get(entry["ref"])
+            folder = skill["name"]
+            for name, ref in skill["files"].items():
+                files[f"{folder}/{name}"] = self.store.blobs.get(ref)
+            files[f"{folder}/README.md"] = (
+                f"# {skill['name']} v{skill['version']}\n\n{skill['description']}\n\nInputs: {skill['inputs']}\n\n"
+                f"Usage: {skill['usage']}\n\nOrigin: {json.dumps(skill['origin'])}\n"
+            ).encode()
+            manifest.append(
+                {
+                    "name": skill["name"],
+                    "version": skill["version"],
+                    "path": f"skills/{folder}/",
+                    "files": sorted(skill["files"]),
+                    "description": skill["description"],
+                    "usage": skill["usage"],
+                    "inputs": skill["inputs"],
+                }
+            )
+        return files, manifest
+
     def _sources(self, contract: AutonomyContract) -> dict[str, bytes]:
         files = {}
         for scope in contract.source_scopes:
@@ -1179,17 +1335,20 @@ class AutonomousResearch:
                         "format": "json",
                     }
                 )
+        skill_files, skill_manifest = self._skill_files(spec)
         workspace = prepare_workspace(
             self.workdir(child) / "workspace",
             inputs=inputs,
             sources=self._sources(contract),
             base={},
+            skills=skill_files,
         )
         result = run_workspace_task(
             self.store,
             child,
             task={
                 "kind": "analysis",
+                "available_skills": skill_manifest,
                 "question": action.question,
                 "rationale": action.rationale,
                 "expected_observation": action.expected_observation,
@@ -1249,6 +1408,14 @@ class AutonomousResearch:
                 "steps": result["steps"],
                 "transcript_owner": child,
                 "evidence_level": "descriptive",
+                "skills_used": sorted(
+                    {
+                        s["name"]
+                        for s in skill_manifest
+                        for p in (workspace / "work").rglob("*.py")
+                        if f"skills/{s['name']}" in p.read_text(errors="replace")
+                    }
+                ),
             },
             register,
         )
@@ -1260,7 +1427,7 @@ class AutonomousResearch:
         def rerun() -> dict[str, Any]:
             shutil.rmtree(fresh, ignore_errors=True)
             (fresh / "work").mkdir(parents=True, mode=0o700)
-            for section in ("inputs", "sources", "base"):
+            for section in ("inputs", "sources", "base", "skills"):
                 shutil.copytree(workspace / section, fresh / section)
             for script in work.rglob("*.py"):
                 target = fresh / "work" / script.relative_to(work)
@@ -1271,7 +1438,7 @@ class AutonomousResearch:
                 "python",
                 [script if script.startswith("work/") else "work/" + script],
                 fresh / "work",
-                readonly=(fresh, *(fresh / s for s in ("inputs", "sources", "base"))),
+                readonly=(fresh, *(fresh / s for s in ("inputs", "sources", "base", "skills"))),
                 cwd=fresh,
                 log_name="rerun",
             )
@@ -1722,6 +1889,8 @@ class AutonomousResearch:
         spec = self.spec(owner)
         contract = contract_of(self.store, spec)
         completed = state["completed"][index]
+        shown = self._memory_shown(contract, state)
+        hidden = set(shown["all"]) - set(shown["refs"])
         context = {
             "research_contract": {
                 k: v
@@ -1741,12 +1910,15 @@ class AutonomousResearch:
             "result_ref": completed["result_ref"],
             "result": self.store.artifacts.get(completed["result_ref"]),
             "research_plan": self.plan(owner, state),
+            "research_memory_lessons": clip(
+                ((state.get("memory") or {}).get("lessons") or []), 400, 40
+            ),
             "earlier_observations": [
                 self.summarize(owner, state, i, False)
                 for i in sorted(state["completed"])
                 if i < index
             ][-8:],
-            "visible_evidence_ids": state["visible"],
+            "visible_evidence_ids": [r for r in state["visible"] if r not in hidden],
             **({"retry_attempt": attempt} if attempt else {}),
             **(
                 {"provider_retry": self._pauses(owner, "critic", index)}
@@ -1851,11 +2023,38 @@ class AutonomousResearch:
             }:
                 if result["status"] in {"CLOSED", "BUDGET_EXHAUSTED"}:
                     self._drain(owner)
+                if self.consolidate and result["status"] in {
+                    "CLOSED",
+                    "BUDGET_EXHAUSTED",
+                    "NEEDS_ATTENTION",
+                    "PAUSED",
+                    "CANCELLED",
+                }:
+                    result = {**result, "memory": self.remember(owner)}
                 return result
             if result["status"] == "WAITING":
                 state = self.state(owner)
                 self.runner.wait_any([state["launched"][i] for i in state["running"]], timeout=30)
         return {**result, "status": "RUNNER_LIMIT"}
+
+    def remember(self, owner: str) -> dict[str, Any]:
+        """Write this session into the domain knowledge base (facts, lessons, skills)."""
+        from jarvis.research_memory import KnowledgeBase
+
+        spec = self.spec(owner)
+        config = AgentConfig.model_validate(
+            {**default_role_config(), **spec.role_config}.get(
+                "curator", {**default_role_config(), **spec.role_config}["critic"]
+            )
+        )
+        try:
+            value = KnowledgeBase(self.store).consolidate(
+                owner, provider_factory=self.provider_factory, config=config
+            )
+        except JarvisError as exc:  # curator refused/unavailable: keep trusted facts at least
+            value = KnowledgeBase(self.store).consolidate(owner)
+            value = {**value, "curator_error": str(exc)[:300]}
+        return {k: (len(v) if isinstance(v, list) else v) for k, v in value.items()}
 
     def _drain(self, owner: str) -> None:
         state = self.state(owner)

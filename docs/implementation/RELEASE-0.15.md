@@ -54,3 +54,12 @@ finishes return to the worker; backtest provenance shown to research roles. A pr
 adapter (not in this repository) declared the real strategy: its baseline replay, live
 Iris submissions, sandboxed training with C++ parity, region compile checks and a small
 real study ran end to end. Full regression after these changes: **344 passed**.
+
+## P18 additions — research memory, skills, Dream from real histories
+
+[P18](P18-research-memory.md): a per-domain `KnowledgeBase` consolidates every ended session
+(trusted facts, curated evidence-linked lessons, versioned skills from reproducible analyses);
+new sessions pin a memory snapshot, reuse remembered evidence, see bounded recall, and mount
+skills in their workbench; Dream-RSI learns from existing sessions (`development_sessions`) and
+adopts into the domain registry that `autonomy start` uses; `autonomy memory` and
+`autonomy dream` CLI commands. COMPARE and outcomes only use same-dataset observations.

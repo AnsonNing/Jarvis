@@ -75,6 +75,7 @@ class QuantFixtureProvider:
             "WorkerStep": self.worker,
             "ExpertOpinion": self.consultant,
             "PolicyProposalBatch": self.developer,
+            "CurationBatch": self.curator,
         }[str(title)](c)
         return {
             "provider": "quant-fixture",
@@ -115,23 +116,14 @@ class QuantFixtureProvider:
         correction = (c.get("correction") or {}).get("reason", "")
         refs = c["visible_evidence_ids"]
         obs = [o for o in c["observations"]]
-        rows = [
-            {**r, "candidate_ref": None}
-            for o in obs
-            if o["kind"] == "BACKTEST" and "result" in o
-            for r in o["result"]["experiments"]
-        ]
-        for o in obs:
-            if o["kind"] == "BACKTEST" and "result" in o:
-                for r in o["result"]["experiments"]:
-                    for row in rows:
-                        if row["result_ref"] == r["result_ref"]:
-                            row["action_index"] = o["index"]
+        # Every known backtest, including earlier sessions' (research memory).
+        rows = [dict(r) for r in c.get("experiment_ledger", []) if r.get("comparable", True)]
         baseline = next(
             (r for r in rows if r["label"] == "baseline" and r["status"] == "SUCCEEDED"), None
         )
         ok = [r for r in rows if r["status"] == "SUCCEEDED"]
-        cand_by_label = {x["label"]: x for x in c["candidates"]}
+        # The scripted plan follows its own candidates; remembered ones are context only.
+        cand_by_label = {x["label"]: x for x in c["candidates"] if not x.get("from_memory")}
 
         def decision(
             branch: dict[str, Any] | None,
@@ -355,7 +347,7 @@ class QuantFixtureProvider:
                 "Test the implemented rule.",
             )
         # 3. model branch (policy or guidance)
-        trained = [x for x in c["candidates"] if x["origin"] == "agent_trained"]
+        trained = [x for x in cand_by_label.values() if x["origin"] == "agent_trained"]
         wants_model = "open a model branch" in correction or adopt_retrain
         best = self._best(ok, baseline)
         if (
@@ -452,9 +444,15 @@ class QuantFixtureProvider:
                 )
         # 5. compare and stop
         compares = [o for o in obs if o["kind"] == "COMPARE"]
-        compared = {r["result_ref"] for o in compares for r in o["result"].get("rows", [])}
+        # Older observations may be compacted (no "result"): coverage is judged by action order.
+        last_compare = max((o["index"] for o in compares), default=-1)
         others = [r for r in ok if baseline and r["result_ref"] != baseline["result_ref"]]
-        if others and (not compares or {r["result_ref"] for r in others} - compared):
+        uncompared = [
+            r
+            for r in others
+            if not compares or (not r.get("from_memory") and r["action_index"] > last_compare)
+        ]
+        if uncompared:
             open_bid = next(b for b, v in branches.items() if v["status"] == "open")
             assert baseline is not None
             return decision(
@@ -469,7 +467,9 @@ class QuantFixtureProvider:
                 "Compare all candidates under the declared profiles.",
             )
         finalist = (
-            compares[-1]["result"]["finalist_by_declared_rule"] if compares else {"status": "NONE"}
+            compares[-1].get("result", {}).get("finalist_by_declared_rule", {"status": "NONE"})
+            if compares
+            else {"status": "NONE"}
         )
         last = compares[-1]["result_ref"] if compares else refs[-1]
         closures = [
@@ -571,6 +571,24 @@ class QuantFixtureProvider:
             "final_script": None,
         }
         if task["kind"] == "analysis":
+            skill = next(
+                (
+                    s
+                    for s in task.get("available_skills", [])
+                    if s["name"] == "regime_threshold_scan"
+                ),
+                None,
+            )
+            if skill and step == 0:
+                return {
+                    **base,
+                    "note": "Reuse the remembered regime scan skill.",
+                    "tool": "run_python",
+                    "path": "work/analysis.py",
+                    "content": "exec(open('skills/regime_threshold_scan/analysis.py').read())\n",
+                }
+            if skill and step == 1:
+                step = 2  # continue with the report step below
             if step == 0:
                 return {
                     **base,
@@ -645,6 +663,63 @@ class QuantFixtureProvider:
             "evidence_refs": c["visible_evidence_ids"][-1:],
             "question_for": None,
             "question": None,
+        }
+
+    # ------------------------------------------------------------------ curator
+    def curator(self, c: dict[str, Any]) -> dict[str, Any]:
+        facts = c["facts"]
+        lessons, skills = [], []
+        finalist = c.get("finalist") or {}
+        if finalist.get("status") == "SELECTED":
+            lessons.append(
+                {
+                    "statement": f"Best candidate under {finalist['profile']} in this world: result {finalist['result_ref'][7:15]}.",
+                    "kind": "finding",
+                    "evidence_refs": [finalist["result_ref"]],
+                    "applicability": "same synthetic world family",
+                    "confidence": "medium",
+                }
+            )
+        for analysis in c["reproducible_analyses"][:1]:
+            lessons.append(
+                {
+                    "statement": "Per-regime threshold scans explain bp gains: "
+                    + analysis["summary"][:300],
+                    "kind": "method",
+                    "evidence_refs": [analysis["result_ref"]],
+                    "applicability": "cancel-threshold research",
+                    "confidence": "medium",
+                }
+            )
+            if not any(s["name"] == "regime_threshold_scan" for s in c["existing_skills"]):
+                skills.append(
+                    {
+                        "analysis_result_ref": analysis["result_ref"],
+                        "name": "regime_threshold_scan",
+                        "description": "Scan cancel thresholds per regime on an observed trades table.",
+                        "usage": "exec(open('skills/regime_threshold_scan/analysis.py').read()) from the workspace root; "
+                        "reads inputs/*.csv and writes work/regime_summary.csv",
+                        "inputs": "one trades CSV with regime, filled, adverse_move_bp, model_cancel, outcome_pl_bp",
+                    }
+                )
+        for failed in facts.get("failed_actions", [])[:1]:
+            lessons.append(
+                {
+                    "statement": f"{failed['kind']} failed: {failed['error'][:200]}",
+                    "kind": "warning",
+                    "evidence_refs": [failed["result_ref"]],
+                    "applicability": "same setup",
+                    "confidence": "low",
+                }
+            )
+        refs = [x for x in [finalist.get("result_ref")] if x] or c["visible_evidence_ids"][:1]
+        return {
+            "context_id": c["context_id"],
+            "summary": "Scripted curation of the finished session.",
+            "lessons": lessons,
+            "skills": skills,
+            "superseded_lessons": [],
+            "evidence_refs": refs,
         }
 
     # ------------------------------------------------------------------ Dream developer

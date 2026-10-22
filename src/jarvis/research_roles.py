@@ -82,6 +82,15 @@ AUTONOMY_ROLE_PROMPTS = {
         + "Give a concise, testable opinion, the strongest counterargument and a concrete check. Advice "
         "is not a measured result."
     ),
+    "autonomy_curator": (
+        "You are the research Curator. A research session has ended; you distil what later sessions in the same "
+        "domain must remember. "
+        + _AUTONOMY_COMMON
+        + "Write lessons that change future decisions: confirmed findings with numbers, negative results worth not "
+        "repeating, effective methods, data quirks and open questions. Cite this session's evidence. Promote a "
+        "skill only from a reproducible analysis whose scripts are reusable, with clear usage and inputs. Mark "
+        "existing lessons superseded only when this session's evidence contradicts them."
+    ),
     "autonomy_policy": (
         "You are the research-policy developer of a Dream-RSI loop. "
         + _AUTONOMY_COMMON

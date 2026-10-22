@@ -384,3 +384,5 @@ class AutonomySessionSpec(Record):
     max_decisions: int = Field(default=200, ge=1, le=2000)
     max_concurrent_actions: int = Field(default=2, ge=1, le=8)
     role_config: dict[str, Any] = Field(default_factory=dict)
+    # Pinned cross-session memory (lessons, prior experiments/candidates/tables, skills).
+    memory_ref: Ref | None = Field(default=None, exclude_if=lambda value: value is None)

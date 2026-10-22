@@ -183,6 +183,8 @@ def test_policy_rules_are_enforced_on_decisions():
     with pytest.raises(ValueError, match="open a model branch"):
         enforce(policy, analysed, stop)
     enforce(policy, {**analysed, "branch_kinds": {"b": "parameter", "m": "model"}}, stop)
+    # Model research recorded in earlier sessions' memory also satisfies the rule.
+    enforce(policy, {**analysed, "model_research_in_memory": True}, stop)
 
 
 def test_contract_rejects_undeclared_profile_metrics_and_grants_keep_stop():

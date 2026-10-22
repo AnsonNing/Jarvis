@@ -21,14 +21,25 @@ def _contract(store: Store, owner: str) -> tuple[AutonomySessionSpec, AutonomyCo
 
 
 def observations(store: Store, owner: str) -> list[dict[str, Any]]:
-    refs = [r for p in _payloads(store, owner, "ARTIFACTS_REGISTERED") for r in p["observations"]]
+    """This session's observations plus earlier sessions' (from its pinned memory)."""
+    spec = AutonomySessionSpec.model_validate(store.manifest(owner)["spec"])
+    remembered = store.artifacts.get(spec.memory_ref)["experiments"] if spec.memory_ref else []
+    own = [r for p in _payloads(store, owner, "ARTIFACTS_REGISTERED") for r in p["observations"]]
+    refs = list(dict.fromkeys([*remembered, *own]))
     return [{**store.artifacts.get(r), "result_ref": r} for r in refs]
 
 
 def session_outcome(store: Store, owner: str) -> dict[str, Any]:
     """Recompute the comparison and finalist from observations, not from Director claims."""
     _, contract = _contract(store, owner)
-    rows = [o for o in observations(store, owner) if o["status"] == "SUCCEEDED"]
+    rows = [
+        o
+        for o in observations(store, owner)
+        if o["status"] == "SUCCEEDED"
+        # remembered experiments from other datasets are context, not comparable rows
+        and (o.get("evaluator_id"), o.get("dataset_id"))
+        == (contract.evaluator_id, contract.dataset_id)
+    ]
     period = contract.periods[0]
     baseline = next(
         (

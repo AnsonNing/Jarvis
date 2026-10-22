@@ -30,7 +30,8 @@ from jarvis.storage import Store
 from jarvis.workbench import Workbench
 
 READ_LIMIT = 40000
-SECTIONS = ("inputs", "sources", "base", "work")
+SECTIONS = ("inputs", "sources", "base", "skills", "work")
+READONLY = ("inputs", "sources", "base", "skills")
 
 
 class WorkerFinding(Record):
@@ -57,12 +58,18 @@ def prepare_workspace(
     inputs: dict[str, bytes],
     sources: dict[str, bytes],
     base: dict[str, bytes],
+    skills: dict[str, bytes] | None = None,
 ) -> Path:
     if root.exists():
         return root
     staging = root.with_name(root.name + ".staging")
     shutil.rmtree(staging, ignore_errors=True)
-    for section, files in (("inputs", inputs), ("sources", sources), ("base", base)):
+    for section, files in (
+        ("inputs", inputs),
+        ("sources", sources),
+        ("base", base),
+        ("skills", skills or {}),
+    ):
         (staging / section).mkdir(parents=True, mode=0o700)
         for name, data in files.items():
             target = safe_path(staging / section, name)
@@ -298,7 +305,7 @@ def execute_step(
             "python",
             [script, *extra],
             work,
-            readonly=(workspace, *(workspace / s for s in ("inputs", "sources", "base"))),
+            readonly=(workspace, *(workspace / s for s in READONLY)),
             cwd=workspace,
             log_name=f"step-{index}",
         )

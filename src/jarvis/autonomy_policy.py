@@ -115,6 +115,7 @@ def enforce(policy: ResearchPolicy, state: dict[str, Any], decision: AutonomyDec
             and state["trainer_available"]
             and state["input_shifting_gain"]
             and "model" not in state["branch_kinds"].values()
+            and not state.get("model_research_in_memory")
         ):
             raise ValueError(
                 "policy: a passing candidate changed model inputs; open a model branch (retraining check) before stopping"

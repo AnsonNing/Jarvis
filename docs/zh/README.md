@@ -93,3 +93,5 @@ Jarvis GitHub 為**公開 repository**，請勿推送私有資料、實際策略
 Dream-RSI 改善的是「選擇研究動作的政策 Q」：開發 session → 由歷史提出候選政策 → 精確 replay 篩選 → 在不相交的新任務上配對執行、以研究角色看不到的 holdout 評分 → 通過才採用 → canary 退步即 rollback。
 
 目前以合成 Hermes-like 世界端到端驗證（只調 bp 約 +3%，重訓約 +8%，regime-aware 規則約 +14%，規則加重訓約 +22%），沒有啟動真實 Hermes 研究。詳見 [P16 文件](../implementation/P16-autonomous-research.md)。
+
+**研究記憶與技能累積（P18）**：每個 session 結束（含暫停、預算用完）時，自動寫入該 domain 的知識庫：可信事實（實驗、候選、表格、分支結論）、curator 整理並附證據的 lessons、以及從可重現分析升級的版本化 skills。新的 session 從釘選的記憶快照開始：沿用過去的實驗與候選、看得到 lessons 與結論、分析工作區自動掛載 `skills/`。Dream-RSI 可以直接從已完成的真實 session 學習，採用的政策寫入 domain 的政策 registry，之後每個 session 自動使用。詳見 [P18 文件](../implementation/P18-research-memory.md)。
