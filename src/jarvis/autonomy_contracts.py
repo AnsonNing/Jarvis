@@ -125,11 +125,11 @@ class Grants(Record):
         "WAIT",
         "STOP",
     )
-    max_setting_changes: int = Field(default=3, ge=1, le=12)
-    max_experiments_per_backtest: int = Field(default=6, ge=1, le=16)
-    max_training_runs: int = Field(default=12, ge=0, le=200)
-    max_implementations: int = Field(default=8, ge=0, le=100)
-    max_analysis_steps: int = Field(default=12, ge=1, le=40)
+    max_setting_changes: int = Field(default=3, ge=1, le=64)
+    max_experiments_per_backtest: int = Field(default=6, ge=1, le=32)
+    max_training_runs: int = Field(default=12, ge=0, le=2000)
+    max_implementations: int = Field(default=8, ge=0, le=1000)
+    max_analysis_steps: int = Field(default=12, ge=1, le=120)
 
     @model_validator(mode="after")
     def essentials(self) -> "Grants":
@@ -152,9 +152,9 @@ class ResearchStages(Record):
     """Explicit exposed-data stages. Confirmation is not an independent locked test."""
 
     kind: Literal["ResearchStages"] = "ResearchStages"
-    screening: tuple[Name, ...] = Field(default=(), max_length=8)
+    screening: tuple[Name, ...] = Field(default=(), max_length=32)
     selection: Name
-    confirmation: tuple[Name, ...] = Field(default=(), max_length=8)
+    confirmation: tuple[Name, ...] = Field(default=(), max_length=32)
 
     @model_validator(mode="after")
     def distinct(self) -> "ResearchStages":
@@ -208,7 +208,7 @@ class AutonomyContract(Record):
     domain: str = Field(min_length=1)
     evaluator_id: str = Field(min_length=1)
     dataset_id: str = Field(min_length=1)
-    periods: tuple[Name, ...] = Field(min_length=1, max_length=12)
+    periods: tuple[Name, ...] = Field(min_length=1, max_length=48)
     exposure: Literal["development_exposed", "synthetic"]
     baseline_candidate_ref: Ref
     settings: tuple[SettingSpec, ...] = Field(default=(), max_length=64)
@@ -298,7 +298,7 @@ class ExperimentSpec(Record):
 
 class BacktestAction(ActionBase):
     kind: Literal["BACKTEST"] = "BACKTEST"
-    experiments: tuple[ExperimentSpec, ...] = Field(min_length=1, max_length=16)
+    experiments: tuple[ExperimentSpec, ...] = Field(min_length=1, max_length=32)
     design: str = Field(min_length=1, max_length=1600)
 
 
@@ -485,8 +485,10 @@ class AutonomySessionSpec(Record):
         max_compute_units=2000,
         max_parallel_jobs=12,
     )
-    max_decisions: int = Field(default=200, ge=1, le=2000)
+    max_decisions: int = Field(default=200, ge=1, le=10000)
     max_concurrent_actions: int = Field(default=2, ge=1, le=8)
+    # False for an unattended owner: the Director decides instead of pausing to ask.
+    owner_checkpoints: bool = True
     role_config: dict[str, Any] = Field(default_factory=dict)
     # Pinned cross-session memory (lessons, prior experiments/candidates/tables, skills).
     memory_ref: Ref | None = Field(default=None, exclude_if=lambda value: value is None)

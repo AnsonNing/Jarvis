@@ -38,7 +38,7 @@ class AgentConfig(Record):
     )
     timeout_seconds: Annotated[int, Field(ge=5, le=1800, strict=True)] = 120
     reserve_tokens: Annotated[int, Field(ge=1, le=200000, strict=True)] = 32768
-    max_calls: Annotated[int, Field(ge=1, le=4000, strict=True)] = 8
+    max_calls: Annotated[int, Field(ge=1, le=50000, strict=True)] = 8
     max_repairs: Annotated[int, Field(ge=0, le=1, strict=True)] = 1
     max_context_bytes: int | None = Field(default=None, ge=8000, exclude_if=lambda v: v is None)
     max_prompt_bytes: int | None = Field(default=None, ge=16000, exclude_if=lambda v: v is None)

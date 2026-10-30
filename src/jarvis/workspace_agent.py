@@ -31,6 +31,8 @@ from jarvis.storage import Store
 from jarvis.workbench import Workbench
 
 READ_LIMIT = 40000
+# Each retry after an output-limit ending asks for a smaller step; give it room to converge.
+WORKER_PROVIDER_RETRIES = 6
 SECTIONS = ("inputs", "sources", "base", "skills", "work")
 READONLY = ("inputs", "sources", "base", "skills")
 
@@ -193,8 +195,10 @@ def run_workspace_task(
                 for e in store.events(owner)
                 if e["event_type"] == "WORKER_PROVIDER_FAILURE" and e["payload"]["index"] == index
             ]
-            if len(failures) >= 3:
-                raise AdmissionError("worker provider ended without usage three times")
+            if len(failures) >= WORKER_PROVIDER_RETRIES:
+                raise AdmissionError(
+                    f"worker provider ended without usage {WORKER_PROVIDER_RETRIES} times"
+                )
             paused = [
                 e
                 for e in store.events(owner)

@@ -359,3 +359,46 @@ def test_method_quotas_do_not_block_an_owner_checkpoint(tmp_path):
         )
     finally:
         engine.runner.shutdown()
+
+
+def test_unattended_session_rejects_owner_checkpoints(tmp_path):
+    store = Store(tmp_path / "store")
+    world = declared_world(store, {})
+    engine = AutonomousResearch(
+        store,
+        world["executors"],
+        lambda cfg, role: PlanningFixtureProvider(role, mode="checkpoint"),
+    )
+    owner = engine.create(
+        AutonomySessionSpec(
+            contract_ref=world["contract_ref"],
+            max_decisions=12,
+            max_concurrent_actions=1,
+            owner_checkpoints=False,
+        )
+    )
+    try:
+        result = engine.run(owner, wall_seconds=30)
+        assert not result.get("owner_question")
+        assert any(
+            "owner is unattended" in json.dumps(e["payload"])
+            for e in store.events(owner)
+            if e["event_type"] == "LAB_ROLE_REJECTED"
+        )
+    finally:
+        engine.runner.shutdown()
+
+
+def test_a_new_session_remembers_a_predecessor_paused_at_a_checkpoint(tmp_path):
+    from jarvis.autonomy_cli import memory_and_policy
+
+    store, engine, owner = session(tmp_path, "checkpoint", consolidate=True)
+    try:
+        assert engine.run(owner, wall_seconds=30)["status"] == "PAUSED"
+        assert KnowledgeBase(store).find("synthetic-planning") is None
+        contract_ref = engine.spec(owner).contract_ref
+        memory_ref, _ = memory_and_policy(store, contract_ref)
+        sessions = KnowledgeBase(store).snapshot("synthetic-planning")["sessions"]
+        assert [s["session"] for s in sessions] == [owner] and memory_ref
+    finally:
+        engine.runner.shutdown()

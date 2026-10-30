@@ -1123,6 +1123,11 @@ class AutonomousResearch:
         if state["running"]:
             raise ValueError("stop guard: actions are still running; WAIT for them first")
         if action.scope == "checkpoint":
+            if not self.spec(owner).owner_checkpoints:
+                raise ValueError(
+                    "the owner is unattended in this session: do not pause to ask; decide from "
+                    "the contract, the brief and owner guidance, record the reasoning, and continue"
+                )
             return  # validated planning review; keep branches open for owner collaboration
         if closures != open_ids:
             raise ValueError(
@@ -1881,7 +1886,13 @@ class AutonomousResearch:
                     except IntegrityError as exc:
                         value = {**value, "status": "INVALID_EVIDENCE", "error": str(exc)}
             tables = {}
+            skipped = []
             for table in value.get("tables", []):
+                size = Path(table["path"]).stat().st_size
+                if size > self.store.blobs.limit:
+                    # An oversized evidence table is noted, not fatal: the result stands.
+                    skipped.append({"name": table["name"], "bytes": size})
+                    continue
                 ref = table_record(
                     self.store,
                     Path(table["path"]),
@@ -1922,6 +1933,8 @@ class AutonomousResearch:
                 "provenance": value.get("provenance", {}),
                 "hypothesis": experiment.hypothesis,
                 "falsification": experiment.falsification,
+                # Only when present, so earlier observations keep their shape.
+                **({"tables_not_stored": skipped} if skipped else {}),
             }
             ref = self.store.artifacts.put(observation)
             register["observations"].append(ref)

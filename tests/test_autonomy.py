@@ -1009,3 +1009,13 @@ def test_training_settings_reach_the_trainer_and_the_trained_candidate(tmp_path)
     assert seen[0]["heuristic_cancel_bps"] == 55.0
     candidate = store.artifacts.get(register["candidates"][0])
     assert candidate["settings"]["heuristic_cancel_bps"] == 55.0
+
+
+def test_oversized_backtest_tables_are_noted_not_fatal(tmp_path):
+    workbench_or_skip(tmp_path)
+    store, engine, owner, _ = session(tmp_path)
+    store.blobs.limit = 64  # smaller than any fixture table
+    engine.run(owner, wall_seconds=600)
+    observations = [store.artifacts.get(r) for r in engine.state(owner)["observations"]]
+    assert observations and all(o["status"] == "SUCCEEDED" for o in observations)
+    assert any(o.get("tables_not_stored") for o in observations)

@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from jarvis.autonomy_contracts import AutonomySessionSpec
-from jarvis.contracts import AdmissionError, Budget
+from jarvis.contracts import AdmissionError, Budget, JarvisError
 from jarvis.researcher import AgentConfig
 from jarvis.storage import Store
 
@@ -176,8 +176,35 @@ def memory_and_policy(
 
     domain = store.artifacts.get(contract_ref)["domain"]
     kb = KnowledgeBase(store)
+    if memory:
+        remember_ended_sessions(store, kb, domain)
     policy = PolicyRegistry(store).active(kb.registry(domain))
     return (kb.pin(domain) if memory else None), policy
+
+
+def remember_ended_sessions(store: Store, kb: Any, domain: str) -> list[str]:
+    """Record the trusted facts of every ended or paused session of the domain not yet in memory,
+    so a successor sees its predecessors' collections, models and results without a manual
+    consolidation. Lessons and skills still need `autonomy memory consolidate` with an agent."""
+    from jarvis.research_memory import session_domain
+
+    with store.connect() as conn:
+        ids = [r[0] for r in conn.execute("SELECT id FROM campaigns")]
+    added = []
+    for cid in ids:
+        m = store.manifest(cid)
+        if m.get("kind") != "AutonomousResearchSession" or m.get("budget_owner"):
+            continue
+        try:
+            if session_domain(store, cid) != domain:
+                continue
+            before = kb.consolidated(kb.ensure(domain)).get(cid)
+            if not before:
+                kb.consolidate(cid)
+                added.append(cid)
+        except JarvisError:
+            continue  # still running, or not a consolidatable session
+    return added
 
 
 def status(store: Store, owner: str) -> dict[str, Any]:
@@ -681,6 +708,7 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             else AutonomySessionSpec.model_fields["budget"].default,
             max_decisions=int(declaration.get("max_decisions", 200)),
             max_concurrent_actions=int(declaration.get("max_concurrent_actions", 2)),
+            owner_checkpoints=bool(declaration.get("owner_checkpoints", True)),
             role_config=declaration.get("role_config", {}),
             runtime=declaration.get("runtime", {}),
         )
