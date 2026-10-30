@@ -216,3 +216,29 @@ def test_large_attachments_stream_to_disk_and_resume(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="incomplete"):
         iris_worker.save_attachments(iris, {"token": "t"}, "deadbeef", found, tmp_path)
     assert raw.stat().st_size == len(payload)
+
+
+def test_oversized_raw_output_fails_instead_of_waiting(tmp_path, iris_environment):
+    env, _ = local_case(iris_environment)
+    root = Path(env.root)
+    agent = root / "iris_agent.py"
+    agent.write_text("""
+import json
+QUEUED,REJECTED,JOB,DONE="queued.txt","rejected.txt","job.json","done.txt"
+def load_config(): return {"name":"fixture"}
+def answers(cfg, rid, unused): return {QUEUED:0,JOB:1,DONE:2}
+def download(cfg, ref):
+    return ["ack",json.dumps({"strategy":"hermes","branch":"toy","period":["2026/01/05","2026/01/06"],"sha":"abc1234"}),
+            "Build passed (2 days, 0 failed)\\nTrades are 5.6 GB, over Slack's 1 GB file limit, so they were not uploaded."][ref]
+def exit_code(reply): return 0
+def result_dir(cfg,rid,found,directory): return directory
+""")
+    env = env.model_copy(update={"agent_script_sha256": file_digest(agent)})
+    request = {
+        "request_id": "1234abcd",
+        "candidate_path": env.template,
+        "candidate_sha256": env.template_sha256,
+        "period": env.period.request_period,
+    }
+    value = LocalIrisTransport(env).collect(request, tmp_path / "worker")
+    assert value["status"] == "FAILED" and value["reason"].startswith("RAW_OUTPUT_TOO_LARGE")

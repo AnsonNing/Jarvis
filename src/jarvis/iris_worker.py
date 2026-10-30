@@ -270,6 +270,16 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
     if not completion or int(completion[1]) != len(dates) or int(completion[2]):
         raise ValueError("incomplete or mismatched market calendar")
     raw_names = [n for n in found if n.endswith(".csv") and "summary" not in n]
+    if not raw_names and re.search(r"over Slack's \d+ ?GB file limit", reply):
+        # Iris ran the job but will never attach the raw trades: fail now, not after hours.
+        return {
+            "status": "FAILED",
+            "request_id": rid,
+            "job": job,
+            "reason": "RAW_OUTPUT_TOO_LARGE: " + reply.strip().splitlines()[-1][:300],
+            "queue_ack": queue_ack,
+            "quota_snapshot": quota,
+        }
     if len(raw_names) != 1:
         return {
             "status": "PENDING",
