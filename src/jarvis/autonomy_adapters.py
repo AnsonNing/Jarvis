@@ -117,7 +117,17 @@ class CommandTrainer:
                 "python", list(self.spec.argv), workdir, readonly=readonly, log_name="train"
             )
         if result["status"] != "PASS" or not (workdir / "result.json").is_file():
-            return {"status": "FAILED", "error": (result["stderr"] or result["stdout"])[-3000:]}
+            limits = self.workbench.environment.limits
+            cause = (
+                f"TIMEOUT: training exceeded the workbench limit ({limits.wall_seconds} s wall, "
+                f"{limits.cpu_seconds} s CPU) | "
+                if result.get("timeout") or result.get("exit_code") in (-9, -24, 137, 152)
+                else f"exit code {result.get('exit_code')} | "
+            )
+            return {
+                "status": "FAILED",
+                "error": cause + (result["stderr"] or result["stdout"])[-3000:],
+            }
         value = json.loads((workdir / "result.json").read_text())
         files = []
         for name in value.get("files", []):

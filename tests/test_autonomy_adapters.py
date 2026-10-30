@@ -461,6 +461,29 @@ def test_command_trainer_runs_owner_entry_point_in_workbench(tmp_path, isolated)
         trainer.run(base, {"l2": 0.5}, None, None, tmp_path / "train2")
 
 
+def test_command_trainer_names_a_timeout(tmp_path, isolated):
+    from jarvis.workbench import WorkbenchLimits
+
+    entry = tmp_path / "owner" / "train_entry.py"
+    entry.parent.mkdir()
+    entry.write_text("import time\ntime.sleep(30)\n")
+    spec = CommandSpec(
+        argv=(str(entry),),
+        readonly=(str(entry.parent),),
+        source_hashes={str(entry): file_digest(entry)},
+        description="slow trainer",
+    )
+    env = analysis_environment().model_copy(
+        update={"limits": WorkbenchLimits(wall_seconds=2, cpu_seconds=100)}
+    )
+    store = Store(tmp_path / "store")
+    base = resolve_candidate(
+        store, candidate_with(store, tmp_path, "model\n", None), tmp_path / "resolved"
+    )
+    out = CommandTrainer(spec, Workbench(env)).run(base, {}, None, None, tmp_path / "train")
+    assert out["status"] == "FAILED" and out["error"].startswith("TIMEOUT")
+
+
 def test_command_patch_validator_and_declared_domain(tmp_path, isolated):
     pipeline = tmp_path / "pipeline"
     pipeline.mkdir()

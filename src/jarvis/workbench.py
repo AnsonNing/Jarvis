@@ -23,8 +23,9 @@ from jarvis.skill_sandbox import SandboxUnavailable, SkillSandbox
 
 
 class WorkbenchLimits(Record):
-    wall_seconds: Annotated[int, Field(ge=1, le=7200, strict=True)] = 120
-    cpu_seconds: Annotated[int, Field(ge=1, le=7200, strict=True)] = 60
+    # Long trainings (multi-month joint fits) run for many hours.
+    wall_seconds: Annotated[int, Field(ge=1, le=259200, strict=True)] = 120
+    cpu_seconds: Annotated[int, Field(ge=1, le=2592000, strict=True)] = 60
     output_bytes: Annotated[int, Field(ge=1024, le=16777216, strict=True)] = 4194304
     file_bytes: Annotated[int, Field(ge=1024, le=2147483648, strict=True)] = 268435456
     open_files: Annotated[int, Field(ge=16, le=4096, strict=True)] = 256
