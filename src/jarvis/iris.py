@@ -224,6 +224,10 @@ def setting_capabilities(env: IrisEnvironment, *, text: str | None = None) -> li
     return output
 
 
+# A Jan-Jul raw output was 772 MB (about 200 s to download); allow much larger ones.
+COLLECT_TIMEOUT_SECONDS = 3600
+
+
 class IrisTransport(Protocol):
     def identity(self) -> dict[str, Any]: ...
     def submit(self, request: dict[str, Any], directory: Path) -> dict[str, Any]: ...
@@ -275,7 +279,8 @@ class LocalIrisTransport:
                 cwd=self.environment.root,
                 env=clean,
                 capture_output=True,
-                timeout=180,
+                # Uploads are small; a collect may download a multi-GB raw trade CSV.
+                timeout=COLLECT_TIMEOUT_SECONDS if operation != "submit" else 180,
                 check=False,
             )
         except subprocess.TimeoutExpired:

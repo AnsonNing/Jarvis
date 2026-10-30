@@ -33,6 +33,48 @@ def load_module(path: Path, name: str) -> Any:
     return module
 
 
+def save_attachments(
+    iris: Any, cfg: dict[str, Any], rid: str, found: dict[str, Any], out: Path
+) -> Path:
+    """Save Iris' final answer like the supplied `outcome`, but stream each attachment to disk.
+
+    Large raw trade CSVs (hundreds of MB to GB) are written in chunks, never held in memory,
+    and a file already on disk at its listed size is not downloaded again, so a later
+    collect of the same request resumes instead of starting over.
+    """
+    import urllib.request
+
+    folder = iris.result_dir(cfg, rid, found, out)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "result.txt").write_text(iris.download(cfg, found[iris.DONE]), encoding="utf-8")
+    skip = {iris.QUEUED, iris.JOB, iris.DONE}
+    for name, file in found.items():
+        if name in skip:
+            continue
+        target = folder / Path(name).name
+        url = (
+            (file.get("url_private_download") or file.get("url_private"))
+            if isinstance(file, dict)
+            else None
+        )
+        if url is None:  # the supplied API's own download (no streamable URL)
+            target.write_text(iris.download(cfg, file), encoding="utf-8")
+            continue
+        size = file.get("size")
+        if target.exists() and size is not None and target.stat().st_size == int(size):
+            continue
+        partial = target.with_name(target.name + ".part")
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {cfg['token']}"})
+        with urllib.request.urlopen(request, timeout=iris.HTTP_TIMEOUT) as response:
+            with partial.open("wb") as sink:
+                while chunk := response.read(8 * 1024 * 1024):
+                    sink.write(chunk)
+        if size is not None and partial.stat().st_size != int(size):
+            raise ValueError("incomplete Iris attachment download")
+        partial.replace(target)
+    return folder
+
+
 def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, Any]:
     env, request = data["environment"], data["request"]
     root = Path(env["root"])
@@ -234,13 +276,8 @@ def perform(operation: str, data: dict[str, Any], directory: Path) -> dict[str, 
             "request_id": rid,
             "reason": "waiting for unique raw trade attachment",
         }
-    # Private API preserves native files. Its stdout is captured below and never
-    # used as financial authority. Evaluation below always uses explicit dates.
-    with contextlib.redirect_stdout(io.StringIO()):
-        code = iris.outcome(cfg, rid, found, directory / "results")
-    if code != 0:
-        return {"status": "PENDING", "request_id": rid}
-    folder = iris.result_dir(cfg, rid, found, directory / "results")
+    # Native files are preserved byte for byte; evaluation below always uses explicit dates.
+    folder = save_attachments(iris, cfg, rid, found, directory / "results")
     path = folder / Path(raw_names[0]).name
     return {
         **evaluate_result(evaluator, env, request, path, job, queue_ack),

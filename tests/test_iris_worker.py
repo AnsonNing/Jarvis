@@ -113,7 +113,7 @@ def upload(cfg, candidate, comment):
     Path("upload-count.txt").write_text("one")
 def answers(cfg, rid, unused): return {QUEUED:0,JOB:1,DONE:2,"sim.hermes_trades.csv":3}
 def download(cfg, ref):
-    return ["fixture quota acknowledgement",json.dumps({"strategy":"hermes","branch":"toy","period":["2026/01/05","2026/01/06"],"sha":"abc1234"}),"2 days, 0 failed"][ref]
+    return ["fixture quota acknowledgement",json.dumps({"strategy":"hermes","branch":"toy","period":["2026/01/05","2026/01/06"],"sha":"abc1234"}),"2 days, 0 failed","product,dynamicexit,pl\\nA,0,3\\nA,-1,999\\nB,0,-1\\n"][ref]
 def exit_code(reply): return 0
 def outcome(cfg, rid, found, directory):
     directory.mkdir(parents=True,exist_ok=True)
@@ -169,3 +169,50 @@ def download(cfg,file):
     assert observed["ack_created_at"].startswith("1970-01-01T00:03:20")
     assert not observed["authoritative_current"]
     assert "inert-fixture-value" not in json.dumps(result)
+
+
+def test_large_attachments_stream_to_disk_and_resume(tmp_path, monkeypatch):
+    """Recorded failure: a 772 MB raw CSV was re-downloaded on every collect and killed."""
+    import io
+    import types
+    import urllib.request
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "jarvis"))
+    import iris_worker
+
+    payload = b"x" * (20 * 1024 * 1024 + 7)
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    iris = types.SimpleNamespace(
+        QUEUED="queued.txt",
+        JOB="job.json",
+        DONE="done.txt",
+        HTTP_TIMEOUT=60,
+        result_dir=lambda cfg, rid, found, out: out / "hermes" / "branch" / f"{rid}_abc1234",
+        download=lambda cfg, file: "✅ Build passed",
+    )
+    found = {
+        "done.txt": {"url_private": "https://files.example/u-done"},
+        "job.json": {"url_private": "https://files.example/u-job"},
+        "sim.hermes_trades_abc1234.csv": {
+            "url_private": "https://files.example/u-raw",
+            "size": len(payload),
+        },
+    }
+    folder = iris_worker.save_attachments(iris, {"token": "t"}, "deadbeef", found, tmp_path)
+    raw = folder / "sim.hermes_trades_abc1234.csv"
+    assert raw.stat().st_size == len(payload) and (folder / "result.txt").exists()
+    assert not list(folder.glob("*.part")) and calls == ["https://files.example/u-raw"]
+    # A later collect of the same request does not download the complete file again.
+    iris_worker.save_attachments(iris, {"token": "t"}, "deadbeef", found, tmp_path)
+    assert calls == ["https://files.example/u-raw"]
+    # A truncated transfer is never accepted as the raw output.
+    found["sim.hermes_trades_abc1234.csv"]["size"] = len(payload) + 1
+    with pytest.raises(ValueError, match="incomplete"):
+        iris_worker.save_attachments(iris, {"token": "t"}, "deadbeef", found, tmp_path)
+    assert raw.stat().st_size == len(payload)
