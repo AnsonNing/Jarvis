@@ -17,7 +17,7 @@ def main() -> None:
     if config["nproc"]:
         resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
     target = config["target"]
-    if config["mode"] == "command":
+    if config["mode"] in {"command", "native"}:
         os.execv(target[0], target)
     for path in reversed(config["site_paths"]):
         sys.path.insert(0, path)

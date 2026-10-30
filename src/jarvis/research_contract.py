@@ -47,7 +47,11 @@ class QuestionSpec(Record):
     def distinct(self) -> "QuestionSpec":
         ids = [h.hypothesis_id for h in self.hypotheses]
         if len(ids) != len(set(ids)):
-            raise ValueError("competing hypotheses need distinct identities")
+            duplicates = sorted({identity for identity in ids if ids.count(identity) > 1})
+            raise ValueError(
+                "competing hypotheses need distinct identities; duplicates: "
+                + ", ".join(duplicates)
+            )
         return self
 
 

@@ -4,6 +4,7 @@ Candidates may use different models. Comparisons still require the same evaluato
 dataset and period, and keep model/data-generation lineage visible in the result.
 """
 
+import math
 from typing import Any
 
 from jarvis.autonomy_contracts import AcceptanceProfile, AutonomyContract, MetricSpec
@@ -15,6 +16,11 @@ def _gain(spec: MetricSpec, candidate: float, baseline: float, relative: bool) -
     return raw / abs(baseline) if relative and baseline else raw
 
 
+def _measured(metrics: dict[str, Any], name: str) -> bool:
+    value = metrics.get(name)
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def assess_profile(
     contract: AutonomyContract,
     profile: AcceptanceProfile,
@@ -24,7 +30,7 @@ def assess_profile(
     specs = {m.name: m for m in contract.metrics}
     objectives: list[dict[str, Any]] = []
     for objective in profile.objectives:
-        if objective.metric not in candidate or objective.metric not in baseline:
+        if not _measured(candidate, objective.metric) or not _measured(baseline, objective.metric):
             objectives.append({"metric": objective.metric, "status": "MISSING"})
             continue
         gain = _gain(
@@ -43,7 +49,7 @@ def assess_profile(
         )
     risks: list[dict[str, Any]] = []
     for limit in profile.risk_limits:
-        if limit.metric not in candidate or limit.metric not in baseline:
+        if not _measured(candidate, limit.metric) or not _measured(baseline, limit.metric):
             risks.append({"metric": limit.metric, "status": "MISSING"})
             continue
         worsening = -_gain(
@@ -58,7 +64,14 @@ def assess_profile(
             }
         )
     count_ok = True
-    if "count" in candidate and "count" in baseline and baseline["count"] > 0:
+    if _measured(baseline, "count") and baseline["count"] > 0:
+        count_ok = _measured(candidate, "count")
+    if (
+        count_ok
+        and _measured(candidate, "count")
+        and _measured(baseline, "count")
+        and baseline["count"] > 0
+    ):
         count_ok = candidate["count"] >= profile.min_count_fraction * baseline["count"]
     missing = any(x["status"] == "MISSING" for x in [*objectives, *risks])
     passed = (
@@ -84,7 +97,7 @@ def pareto_front(contract: AutonomyContract, rows: list[dict[str, Any]]) -> list
     def oriented(row: dict[str, Any]) -> list[float] | None:
         values = []
         for name in names:
-            if name not in row["metrics"]:
+            if not _measured(row["metrics"], name):
                 return None
             value = float(row["metrics"][name])
             values.append(value if specs[name].direction == "maximize" else -value)

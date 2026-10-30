@@ -1,0 +1,14 @@
+# Runs once through the normal CLI. No paid provider, Iris or Dream calls.
+adapter: jarvis.runtime_fixture:declared_world
+agent: runtime-fixture
+memory: false
+runtime: {}
+max_decisions: 16
+max_concurrent_actions: 1
+budget:
+  max_actions: 100
+  max_tool_calls: 100
+  max_llm_tokens: 1000000
+  max_wall_seconds: 1800
+  max_compute_units: 100
+  max_parallel_jobs: 4

@@ -17,6 +17,14 @@ from jarvis.storage import Store
 
 def provider_factory(agent: str, *, eager_stop: bool = False, relay: Path | None = None) -> Any:
     """codex / claude (headless CLIs), relay (answered through files), fixture (scripted)."""
+    if agent == "runtime-fixture":
+        from jarvis.runtime_fixture import RuntimeFixtureProvider
+
+        return lambda config, role: RuntimeFixtureProvider(role)
+    if agent == "planning-fixture":
+        from jarvis.planning_fixture import PlanningFixtureProvider
+
+        return lambda config, role: PlanningFixtureProvider(role)
     if agent == "codex":
         from jarvis.providers import CodexProvider
 
@@ -131,6 +139,28 @@ def engine_for(store: Store, declaration: dict[str, Any]) -> tuple[Any, dict[str
     from jarvis.autonomous_research import AutonomousResearch
 
     built = load_adapter(declaration)(store, declaration.get("adapter_args", {}))
+    if any(k in declaration for k in ("analysis_delivery", "research_stages", "research_planning")):
+        from jarvis.autonomy_contracts import (
+            AnalysisDelivery,
+            AutonomyContract,
+            ResearchPlanning,
+            ResearchStages,
+        )
+
+        contract = store.artifacts.get(built["contract_ref"])
+        if "analysis_delivery" in declaration:
+            contract["analysis_delivery"] = AnalysisDelivery.model_validate(
+                declaration["analysis_delivery"]
+            ).model_dump(mode="json")
+        if "research_stages" in declaration:
+            contract["stages"] = ResearchStages.model_validate(
+                declaration["research_stages"]
+            ).model_dump(mode="json")
+        if "research_planning" in declaration:
+            contract["planning"] = ResearchPlanning.model_validate(
+                declaration["research_planning"]
+            ).model_dump(mode="json")
+        built["contract_ref"] = store.artifacts.put(AutonomyContract.model_validate(contract))
     agent = declaration.get("agent", "codex")
     factory = provider_factory(agent, relay=store.root / "relay")
     remember = bool(declaration.get("memory", True))
@@ -216,7 +246,13 @@ def status(store: Store, owner: str) -> dict[str, Any]:
         {"event": e["event_type"], "reason": str(e["payload"].get("reason"))[:400]}
         for e in store.events(owner)
         if e["event_type"]
-        in {"DIRECTOR_FAILURE", "CRITIC_FAILURE", "PROVIDER_PAUSED", "LAB_ROLE_REJECTED"}
+        in {
+            "DIRECTOR_FAILURE",
+            "CRITIC_FAILURE",
+            "PROVIDER_PAUSED",
+            "LAB_ROLE_REJECTED",
+            "SESSION_PARTIAL_STOP",
+        }
     ]
     memory = state.get("memory") or {}
     return {
@@ -233,9 +269,21 @@ def status(store: Store, owner: str) -> dict[str, Any]:
             "max": spec.max_decisions,
         },
         "plan": engine.plan(owner, state),
+        **({"owner_checkpoint": state.get("owner_checkpoint")} if contract.planning else {}),
         "running": state["running"],
         "recent_actions": recent,
         "best_so_far": best,
+        **(
+            {
+                "stage_gate": outcome["stage_gate"],
+                "research_stages": outcome["stages"],
+                "selection_finalist": outcome["selection_finalist"],
+                "confirmation": outcome["confirmation"],
+                "independent_validation": "NOT_RUN",
+            }
+            if contract.stages
+            else {}
+        ),
         "open_questions": list(reviews[-1]["next_questions"]) if reviews else [],
         "owner_guidance": [
             {
@@ -623,6 +671,7 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             max_decisions=int(declaration.get("max_decisions", 200)),
             max_concurrent_actions=int(declaration.get("max_concurrent_actions", 2)),
             role_config=declaration.get("role_config", {}),
+            runtime=declaration.get("runtime", {}),
         )
         owner = engine.create(spec)
         store.append(

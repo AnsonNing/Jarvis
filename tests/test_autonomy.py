@@ -735,6 +735,7 @@ class _FlakyProvider(QuantFixtureProvider):
     """Times out once for the Director and once for the worker (process ended, no usage)."""
 
     failed: set[str] = set()
+    failure_error: str = "PROVIDER_TIMEOUT"
 
     def complete(self, prompt, schema, directory):
         title = schema.get("title")
@@ -745,16 +746,18 @@ class _FlakyProvider(QuantFixtureProvider):
                 "answer": None,
                 "usage": None,
                 "cost": None,
-                "error": "PROVIDER_TIMEOUT",
+                "error": _FlakyProvider.failure_error,
                 "events": [],
                 "stderr": "",
             }
         return super().complete(prompt, schema, directory)
 
 
-def test_ended_provider_calls_are_charged_and_retried(tmp_path):
+@pytest.mark.parametrize("error", ["PROVIDER_TIMEOUT", "PROVIDER_INCOMPLETE:OUTPUT_LIMIT"])
+def test_ended_provider_calls_are_charged_and_retried(tmp_path, error):
     workbench_or_skip(tmp_path)
     _FlakyProvider.failed = set()
+    _FlakyProvider.failure_error = error
     store, engine, owner, _ = session(
         tmp_path, policy=EXPLAIN, provider=lambda cfg, role: _FlakyProvider(role)
     )
@@ -766,11 +769,24 @@ def test_ended_provider_calls_are_charged_and_retried(tmp_path):
         for e in store.events(c)
         if e["event_type"] == "JOB_SETTLED_AT_RESERVATION"
     ]
-    assert len(settled) == 2 and all(e["payload"]["reason"] == "PROVIDER_TIMEOUT" for e in settled)
+    assert len(settled) == 2 and all(e["payload"]["reason"] == error for e in settled)
     assert any(e["event_type"] == "DIRECTOR_FAILURE" for e in store.events(owner))
     audit = verify_session(store, owner)
     assert audit["validation"] == "VERIFIED" and not any(audit["usage"]["pending"].values())
     assert audit["usage"]["actual"]["llm_tokens"] >= 2 * 120000  # both reservations were charged
+    worker_contexts = [
+        store.artifacts.get(e["payload"]["context_ref"])
+        for c in engine.state(owner)["launched"].values()
+        for e in store.events(c)
+        if e["event_type"] == "LAB_ROLE_REQUESTED" and e["payload"]["role"] == "autonomy_worker"
+    ]
+    retries = [c for c in worker_contexts if c.get("retry_attempt")]
+    assert retries
+    if error.endswith("OUTPUT_LIMIT"):
+        assert "one small step" in retries[0]["output_limit_recovery"]["instruction"]
+        assert "full reservation" in retries[0]["output_limit_recovery"]["reason"]
+    else:
+        assert "output_limit_recovery" not in retries[0]
 
 
 def test_codex_usage_limit_events_are_classified_as_quota_refusals():

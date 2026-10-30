@@ -30,6 +30,14 @@ class WorkbenchLimits(Record):
     open_files: Annotated[int, Field(ge=16, le=4096, strict=True)] = 256
 
 
+class NativeExecution(Record):
+    """Owner supplied capability; generated code never chooses compiler/flags."""
+
+    compiler: str
+    compiler_sha256: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    flags: tuple[str, ...] = Field(default=("-std=c++17", "-O0"), max_length=16)
+
+
 class AnalysisEnvironment(Record):
     """Owner-declared interpreter packages; never Jarvis's own trusted runtime state."""
 
@@ -43,6 +51,7 @@ class AnalysisEnvironment(Record):
     # (e.g. an HPP parity probe). Still no network and no other writable location.
     allow_exec_in_workdir: bool = False
     extra_env: dict[str, str] = Field(default_factory=dict)
+    native: NativeExecution | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 def tail(data: bytes, limit: int = 12000) -> str:
@@ -195,7 +204,7 @@ class Workbench:
 
         `cwd` (default `workdir`) must be `workdir` or one of the read-only mounts.
         """
-        if mode not in {"python", "command"}:
+        if mode not in {"python", "command", "native"}:
             raise SandboxUnavailable("unexpected workbench operation")
         workdir = workdir.resolve()
         workdir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -208,7 +217,7 @@ class Workbench:
             "target": target,
             "site_paths": [str(Path(p).resolve()) for p in self.environment.site_paths],
             "limits": limits.model_dump(mode="json"),
-            "nproc": mode == "python",
+            "nproc": mode != "command",
         }
         arguments = [str(self.interpreter), "-I", "-B", str(self.worker), json.dumps(config)]
         cwd = (cwd or workdir).resolve()

@@ -142,6 +142,7 @@ class FakeTransport:
         raw.write_text("order_id,pl\n1,2.5\n")
         return {
             "status": "SUCCEEDED",
+            "result_origin": "SIMULATED_FIXTURE",
             "entry_only_pl": 2.5,
             "count": 1,
             "mdd": 0.0,
@@ -210,6 +211,188 @@ def test_iris_backtester_renders_candidate_and_never_resubmits(tmp_path):
     with pytest.raises(AdmissionError, match="QUOTA_GUARD"):
         tester.run(resolved, {**settings, "sampling_ms": 400}, "dev", tmp_path / "work4")
     assert FakeTransport.calls["submit"] == 2
+
+
+def test_captured_source_evidence_matches_upload_and_retains_exact_diff(tmp_path):
+    from jarvis.autonomous_research import table_record
+    from jarvis.autonomy_adapters import RegionSetting, SubmissionLedger
+    from jarvis.autonomy_evidence import table_evidence
+    from jarvis.autonomy_source import source_evidence
+    from jarvis.identity import raw_digest
+
+    store = Store(tmp_path / "store")
+    ref = candidate_with(store, tmp_path, "trained model v2\n", "return order.age > 5;\n")
+    resolved = resolve_candidate(store, ref, tmp_path / "resolved")
+    FakeTransport.calls = {"submit": 0, "collect": 0}
+    tester = IrisRegionBacktester(
+        {"dev": environment(tmp_path)},
+        settings=(
+            RegionSetting(
+                name="heuristic_cancel_bps",
+                region="config",
+                symbol="toy_heuristic",
+                syntax="double",
+                scale=0.0001,
+            ),
+        ),
+        setting_defaults={"heuristic_cancel_bps": 40},
+        ledger=SubmissionLedger(tmp_path / "ledger.jsonl", daily_limit=1),
+        transport_factory=FakeTransport,
+        poll_seconds=0,
+    )
+    settings = {"heuristic_cancel_bps": 30}
+    work = tmp_path / "work"
+    result = tester.run(resolved, settings, "dev", work)
+    table = source_evidence(tester, resolved, settings, "dev", work, result["provenance"])
+    proof = json.loads(Path(table["path"]).read_text())
+    assert proof["status"] == "VERIFIED" and proof["protected_text_unchanged"] is True
+    assert proof["candidate_source_sha256"] == raw_digest(FakeTransport.submitted.encode())
+    assert "toy_heuristic = 0.003;" in proof["source_diff"]
+    assert "config" in proof["changed_regions"]
+    artifact = table_record(
+        store,
+        Path(table["path"]),
+        name="execution_source",
+        description="fixture source proof",
+        lineage={"experiment": "fixture"},
+        exposure="synthetic",
+    )
+    view = table_evidence(store, artifact)
+    assert view["source_evidence"]["submitted_hash_matches"] is True
+    assert "candidate_source" not in view["source_evidence"]
+    # Cached results must bind the reconstruction to an explicit original checksum.
+    cached = tmp_path / "cached"
+    cached.mkdir()
+    reused = source_evidence(
+        tester,
+        resolved,
+        settings,
+        "dev",
+        cached,
+        {"candidate_sha256": proof["candidate_source_sha256"], "request_id": "original"},
+    )
+    assert (
+        json.loads(Path(reused["path"]).read_text())["capture_origin"]
+        == "cached_request_reconstruction"
+    )
+    with pytest.raises(IntegrityError, match="recorded request"):
+        source_evidence(
+            tester, resolved, settings, "dev", cached, {"candidate_sha256": "sha256:" + "0" * 64}
+        )
+    submission = json.loads((work / "submission.json").read_text())
+    Path(submission["candidate_path"]).write_text("tampered")
+    with pytest.raises(IntegrityError, match="recorded request"):
+        source_evidence(tester, resolved, settings, "dev", work, result["provenance"])
+    assert FakeTransport.calls["submit"] == 1
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_source_capture_is_opt_in_and_registered_as_observed_evidence(tmp_path, capture):
+    from jarvis.autonomous_research import AutonomousResearch
+    from jarvis.autonomy_adapters import RegionSetting, SubmissionLedger
+    from jarvis.autonomy_contracts import (
+        AnalysisDelivery,
+        AutonomyContract,
+        AutonomySessionSpec,
+        BacktestAction,
+    )
+    from jarvis.quant_fixture import QuantFixtureProvider
+    from jarvis.research_executors import Executors
+
+    store = Store(tmp_path / "store")
+    ref = candidate_with(store, tmp_path, "trained model v2\n", None)
+    base = Candidate.model_validate(store.artifacts.get(ref)).model_copy(
+        update={"origin": "owner_baseline"}
+    )
+    ref = store.artifacts.put(base)
+    tester = IrisRegionBacktester(
+        {"dev": environment(tmp_path)},
+        settings=(
+            RegionSetting(
+                name="heuristic_cancel_bps",
+                region="config",
+                symbol="toy_heuristic",
+                syntax="double",
+                scale=0.0001,
+            ),
+        ),
+        setting_defaults={"heuristic_cancel_bps": 40},
+        ledger=SubmissionLedger(tmp_path / "ledger.jsonl", 1),
+        transport_factory=FakeTransport,
+        poll_seconds=0,
+    )
+    c = AutonomyContract(
+        task_id="source_fixture",
+        instruction="SIMULATED_FIXTURE source evidence acceptance",
+        objective="fixture",
+        focus="source",
+        domain="synthetic",
+        evaluator_id="fixed",
+        dataset_id="fixture",
+        periods=("dev",),
+        exposure="synthetic",
+        baseline_candidate_ref=ref,
+        settings=(
+            {
+                "name": "heuristic_cancel_bps",
+                "kind": "float",
+                "minimum": 1,
+                "maximum": 100,
+                "baseline": 40,
+                "description": "fixture",
+            },
+        ),
+        metrics=({"name": "pl", "direction": "maximize", "description": "fixture units"},),
+        acceptance_profiles=(
+            {"name": "gain", "objectives": [{"metric": "pl"}], "description": "fixture"},
+        ),
+        constraints=("synthetic only",),
+        origin="declared_fixture",
+        analysis_delivery=AnalysisDelivery(capture_submitted_source=capture),
+    )
+    engine = AutonomousResearch(
+        store,
+        Executors(Workbench(), backtester=tester),
+        lambda cfg, role: QuantFixtureProvider(role),
+    )
+    o = engine.create(AutonomySessionSpec(contract_ref=store.artifacts.put(c)))
+    child = store.create(
+        {
+            "kind": "AutonomousAction",
+            "world_id": "fixture",
+            "task": {"budget": engine.spec(o).budget.model_dump()},
+            "budget_owner": o,
+        }
+    )
+    FakeTransport.calls = {"submit": 0, "collect": 0}
+    action = BacktestAction(
+        branch_id="b",
+        question_id="q",
+        hypothesis_ids=("h",),
+        rationale="fixture",
+        expected_observation="source proof",
+        evidence_refs=(),
+        design="fixture",
+        experiments=(
+            {
+                "label": "source",
+                "candidate_ref": ref,
+                "settings": [{"name": "heuristic_cancel_bps", "value": 30}],
+                "period": "dev",
+                "hypothesis": "fixture",
+                "falsification": "fixture",
+            },
+        ),
+    )
+    result, registered = engine._backtest(o, child, 0, action)
+    obs = store.artifacts.get(registered["observations"][0])
+    assert ("execution_source" in obs["tables"]) is capture
+    assert result["experiments"][0]["status"] == "SUCCEEDED"
+    if capture:
+        proof = store.artifacts.get(obs["tables"]["execution_source"])
+        assert proof["blob_ref"] and proof["lineage"]["candidate_ref"] == ref
+    else:
+        assert "capture_submitted_source" not in c.analysis_delivery.model_dump()
 
 
 def test_region_patch_validator_checks_markers_and_scope(tmp_path):

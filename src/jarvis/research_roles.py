@@ -7,7 +7,6 @@ from pydantic import Field
 
 from jarvis.contracts import (
     AdmissionError,
-    BudgetExceeded,
     Cost,
     IntegrityError,
     JarvisError,
@@ -17,6 +16,7 @@ from jarvis.identity import digest
 from jarvis.iris_contracts import IrisExperiment
 from jarvis.providers import ResearchProvider
 from jarvis.researcher import AgentConfig
+from jarvis.runtime_controls import RoleCallLimitExceeded, encoded_size, prompt_preflight
 from jarvis.storage import Store
 
 
@@ -43,16 +43,47 @@ AUTONOMY_ROLE_PROMPTS = {
         + _AUTONOMY_COMMON
         + "Each turn: read the situation, the research plan, recent observations and critiques; respond to "
         "every pending owner guidance item (adopt or decline with a reason); then choose ONE next action. "
+        "Question and hypothesis IDs are declared once per session. A new branch may address an "
+        "existing question: set question=null and use its existing question_id/hypothesis_ids; "
+        "do not recreate those objects. Likewise set branch=null for an existing branch. "
+        "When a matched baseline already appears in experiment_ledger, cite its result_ref and "
+        "submit only the new configuration in experiments; a baseline row labelled reuse is "
+        "still a duplicate request. On correction, inspect the rejected_answer and specific "
+        "validation details; preserve valid intent rather than regenerating an unrelated plan. "
         "Prefer actions that discriminate between competing explanations over enumerating parameters: "
         "read source to understand mechanisms, analyze observed tables to find where PL/PR changes come "
-        "from, and only then backtest, retrain, or implement new rules. When a parameter change helps, ask "
-        "why (which orders were cancelled, which regimes, whether the model's inputs shifted) before "
+        "from, and only then backtest, retrain, or implement new rules. "
+        "Use analyzable_evidence_ids for ANALYZE input_refs; review/role receipts are citations, not "
+        "workspace inputs. For IMPLEMENT, cite the analysis result or exact observed tables needed "
+        "for formulas/thresholds in evidence_refs: these admissible records and the cited analysis's "
+        "registered output tables are mounted in inputs/ for the worker. "
+        "When a parameter change helps, ask why (which orders were cancelled, which regimes, whether the model's inputs shifted) before "
         "continuing the sweep. Consider whether the model needs retraining under a changed data-generating "
         "policy, and whether a new rule beats tuning. Use controlled designs (e.g. model x rule 2x2) and "
         "label data-generation lineage. Open branches for distinct research directions and close them with "
         "evidence. Do not stop while budget remains and promising open branches exist; a session STOP must "
         "close every open branch with evidence. Use WAIT only when every useful next step depends on a "
-        "running action."
+        "running action. If stage_progress is present, screen only for feasibility; select on its selection "
+        "period, then test the exact selected candidate/settings against matched baselines on every "
+        "confirmation period. Confirmation freezes selection: no further tuning in that session. "
+        "Do not claim research_complete before stage_progress.gate is PASS. Exposed confirmation is not independent validation."
+        " When research_plan.planning is present, use planning_review at initial framing, new branches, "
+        "important criticism, owner redirects and stopping. Keep a short board of falsifiable directions "
+        "with qualitative effort, information value, feasibility and reasons for priority/deferral. "
+        "Do not silently drop pending directions. Directions are proposals, not observations. "
+        "Select the card whose direction_id is the action's branch_id and whose hypothesis is addressed. "
+        "Copy that declared hypothesis's claim, prediction and falsification exactly into the card; "
+        "do not paraphrase it while changing the next action or its reason. "
+        "Routine steps may omit a review. After a refuted branch, consider genuinely different mechanisms "
+        "or a cheap discriminating test when justified; do not merely rename a parameter tweak. There is "
+        "no required number of branches, tools or experiments. A branch STOP only closes that branch; "
+        "a session STOP needs goal_met or a separate no_justified_next_step review accounting for remaining "
+        "directions, limits and untested possibilities. Remaining budget alone does not mandate work. "
+        "Use STOP scope=checkpoint with no closures, conclusion=inconclusive/blocked, owner_checkpoint "
+        "basis and one concrete owner_question when a meaningful priority, scope or missing input needs "
+        "collaboration. This pauses with branches open for advise/resume, without claiming mission exhaustion. "
+        "Do not request routine approvals when the owner delegated judgment. Honor supplied ideas with "
+        "human_provided provenance; guidance cannot change fixed evaluation or permissions."
     ),
     "autonomy_critic": (
         "You are the independent Critic of an autonomous research session, called separately from the "
@@ -62,17 +93,29 @@ AUTONOMY_ROLE_PROMPTS = {
         "observation. Check confounds, selection bias from many tried candidates, sample size, daily "
         "concentration, drawdown, leakage in training data, data-generation lineage for retrained models, "
         "and whether a descriptive analysis is being over-read as causal. Recommend continue, close_branch, "
-        "investigate_further, or invalid_result."
+        "investigate_further, or invalid_result. When trusted_evidence is supplied, inspect its table/script "
+        "previews, execution receipts, missing fields and clean rerun result. Distinguish recorded and verified "
+        "facts from genuinely missing evidence; previews are partial. Distinguish worker self-checks from "
+        "a trusted_harness clean rerun by inspecting its recorded execution scope. Do not demand hidden-engine "
+        "evidence that the adapter cannot expose as a repair of delivered analysis; identify a data/tool gap."
+        " A close_branch recommendation concerns that branch. When a planning board is present, consider "
+        "alternative explanations and cross-direction information/cost tradeoffs before suggesting overall "
+        "stopping. Suggest justified alternatives or a useful owner question, without inventing results, "
+        "requiring a fixed search breadth, or repeating completed diagnostics."
     ),
     "autonomy_worker": (
         "You are a research engineer working inside an isolated workbench with no network. You act through "
-        "one tool call per turn: write_file, run_python, read_file, list_files, validate, or finish. "
+        "one tool call per turn: write_file, run_python, run_native, read_file, list_files, validate, or finish. "
         + _AUTONOMY_COMMON
         + "Scripts run with the workspace root as the current directory: read inputs/ and sources/ (read-only) "
         "and write only under work/. run_python takes inline Python in content (saved to path, default "
         "work/step_N.py) or runs an existing work/ script named in path. Python has the declared analysis "
         "packages. Inspect data before computing; print compact results. Fix errors from the transcript "
-        "instead of repeating failing steps. For implementation tasks edit only the declared files in work/ "
+        "run_native is available only when native_execution.available is true; it compiles a saved work/ C++ source "
+        "using the fixed owner toolchain and runs the resulting binary, with no custom flags or arguments. "
+        "Its hash-verified receipt is supplied as a read-only inputs/ JSON for later Python analysis. "
+        "instead of repeating failing steps. Split large scripts into small saved steps; keep structured "
+        "answers short. For implementation tasks edit only the declared files in work/ "
         "and run validate before finishing. finish must summarize concrete findings with numbers produced "
         "by your scripts and list output files and the final script."
     ),
@@ -139,6 +182,53 @@ class RoleCaller:
         role_budget: bool = False,
         guidance: str | None = None,
     ) -> dict[str, Any]:
+        prompt_preflight(context, schema, self.config)
+        for attempt in range((self.config.provider_retries or 0) + 1):
+            try:
+                return self._call_once(
+                    owner,
+                    role,
+                    context,
+                    schema,
+                    fault=fault,
+                    role_budget=role_budget,
+                    guidance=guidance,
+                    transport_attempt=attempt,
+                )
+            except AdmissionError as exc:
+                # Only finalized, charged, explicitly transient failures. Unknown usage is
+                # handled by reconciliation, never by this retry path.
+                transient = any(
+                    code in str(exc)
+                    for code in (
+                        "charged provider failure: PROVIDER_TRANSIENT",
+                        "charged provider failure: PROVIDER_TIMEOUT",
+                        "charged provider failure: PROVIDER_INTERRUPTED",
+                    )
+                )
+                if not transient or attempt >= (self.config.provider_retries or 0):
+                    raise
+                payload = {"role": role, "context_id": digest(context), "attempt": attempt + 1}
+                if not any(
+                    e["payload"] == payload
+                    for e in self.store.events(owner)
+                    if e["event_type"] == "ROLE_TRANSPORT_RETRY"
+                ):
+                    self.store.append(owner, "ROLE_TRANSPORT_RETRY", payload)
+        raise AssertionError("unreachable retry bound")
+
+    def _call_once(
+        self,
+        owner: str,
+        role: str,
+        context: dict[str, Any],
+        schema: dict[str, Any],
+        *,
+        fault: str | None = None,
+        role_budget: bool = False,
+        guidance: str | None = None,
+        transport_attempt: int = 0,
+    ) -> dict[str, Any]:
         context_id = digest(context)
         request = {
             "world_id": self.store.manifest(owner)["world_id"],
@@ -149,6 +239,16 @@ class RoleCaller:
             "config": self.config.model_dump(mode="json"),
             "provider": self.provider.identity(),
         }
+        if self.config.max_prompt_bytes is not None:
+            request["prompt_envelope"] = {
+                "context_bytes": encoded_size(context),
+                "schema_bytes": encoded_size(schema),
+                "prompt_cap_bytes": self.config.max_prompt_bytes,
+                "reservation_tokens": self.config.reserve_tokens,
+                "estimator": "UTF-8 bytes plus fixed prompt/output headroom; observed usage charged separately",
+            }
+        if transport_attempt:
+            request["transport_attempt"] = transport_attempt
         if role_budget:
             request["call_limit_scope"] = role
         if guidance is not None:
@@ -175,13 +275,10 @@ class RoleCaller:
                         if self.store.artifacts.get(j["request_ref"]).get("call_limit_scope")
                         == role
                     ]
-                if len(jobs) >= self.config.max_calls or any(
-                    j["actual"]
-                    and Cost.model_validate_json(j["actual"]).llm_tokens
-                    > self.store.artifacts.get(j["request_ref"])["config"]["reserve_tokens"]
-                    for j in all_jobs
-                ):
-                    raise BudgetExceeded("role call limit or observed token overrun")
+                if len(jobs) >= self.config.max_calls:
+                    raise RoleCallLimitExceeded(
+                        "ROLE_CALL_LIMIT: declared role allowance ended; total campaign budget may remain"
+                    )
                 jid = self.store.reserve(
                     owner,
                     request,
@@ -281,7 +378,12 @@ class RoleCaller:
         receipt = self.store.read_receipt(job["id"])
         if receipt is None or receipt.get("cost") is None:
             self.store.set_status(owner, "NEEDS_RECONCILIATION")
-            raise JarvisError("role usage/completion unknown; reservation retained")
+            reason = (
+                ": OUTPUT_LIMIT"
+                if receipt and receipt.get("error") == "PROVIDER_INCOMPLETE:OUTPUT_LIMIT"
+                else ""
+            )
+            raise JarvisError("role usage/completion unknown; reservation retained" + reason)
         self.store.finish_auxiliary_job(
             job["id"],
             "ROLE_COMPLETED",
@@ -292,6 +394,19 @@ class RoleCaller:
                 "error": receipt.get("error"),
             },
         )
+        actual = Cost.model_validate(receipt["cost"]).llm_tokens
+        if actual > self.config.reserve_tokens:
+            payload = {
+                "job_id": job["id"],
+                "reserved": self.config.reserve_tokens,
+                "actual": actual,
+            }
+            if not any(
+                e["payload"] == payload
+                for e in self.store.events(owner)
+                if e["event_type"] == "ROLE_RESERVATION_OVERRUN"
+            ):
+                self.store.append(owner, "ROLE_RESERVATION_OVERRUN", payload)
         if receipt.get("error"):
             raise AdmissionError("charged provider failure: " + str(receipt["error"]))
         return {

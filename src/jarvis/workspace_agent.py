@@ -23,6 +23,7 @@ from jarvis.autonomy_jobs import (
 )
 from jarvis.bounded_roles import evidence_role
 from jarvis.contracts import AdmissionError, Cost, JarvisError, Record
+from jarvis.native_execution import capability
 from jarvis.providers import ResearchProvider
 from jarvis.research_contract import Ref
 from jarvis.researcher import AgentConfig
@@ -42,7 +43,9 @@ class WorkerFinding(Record):
 class WorkerStep(Record):
     context_id: Ref
     note: str = Field(min_length=1, max_length=1200)
-    tool: Literal["write_file", "run_python", "read_file", "list_files", "validate", "finish"]
+    tool: Literal[
+        "write_file", "run_python", "run_native", "read_file", "list_files", "validate", "finish"
+    ]
     path: str | None
     content: str | None = Field(max_length=200000)
     arguments: tuple[str, ...] = Field(max_length=16)
@@ -122,6 +125,7 @@ def run_workspace_task(
     max_steps: int,
     validator: Callable[[Path], dict[str, Any]] | None = None,
     guidance: str = "",
+    finish_validator: Callable[[WorkerStep, int], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     transcript: list[dict[str, Any]] = []
     for prior in [e["payload"] for e in store.events(owner) if e["event_type"] == "WORKER_STEP"]:
@@ -144,6 +148,7 @@ def run_workspace_task(
             "workspace": listing(workspace),
             "steps_remaining": max_steps - index,
             "validator_available": validator is not None,
+            "native_execution": capability(workbench),
             "transcript": [
                 t
                 if t["step"] >= len(transcript) - 8
@@ -169,6 +174,15 @@ def run_workspace_task(
                 )
             if answer.tool == "validate" and not frozen["validator_available"]:
                 raise ValueError("no validator for this task")
+            if answer.tool == "run_native" and (
+                not frozen["native_execution"]["available"]
+                or not answer.path
+                or answer.arguments
+                or answer.content is not None
+            ):
+                raise ValueError(
+                    "run_native requires the declared capability, a saved path and no arguments/content"
+                )
             if answer.tool == "finish" and not answer.summary:
                 raise ValueError("finish requires a summary")
 
@@ -197,6 +211,16 @@ def run_workspace_task(
                     {
                         **context,
                         **({"retry_attempt": len(failures)} if failures else {}),
+                        **(
+                            {
+                                "output_limit_recovery": {
+                                    "reason": "The previous provider process ended at max_output_tokens; its usage remains unknown and its full reservation was charged.",
+                                    "instruction": "Use one small step now. Split long scripts across short write_file calls, reuse saved files, and keep finish concise. Never regenerate raw data in the answer or repeat completed experiments. Preserve the declared reasoning effort.",
+                                }
+                            }
+                            if failures and "OUTPUT_LIMIT" in failures[-1]["reason"]
+                            else {}
+                        ),
                         **({"provider_retry": len(paused)} if paused else {}),
                     },
                     WorkerStep,
@@ -217,7 +241,16 @@ def run_workspace_task(
                     owner, "WORKER_PROVIDER_FAILURE", {"index": index, "reason": str(exc)[:500]}
                 )
         assert isinstance(step, WorkerStep)
-        observation = execute_step(store, owner, index, step, workspace, workbench, validator)
+        observation = execute_step(
+            store,
+            owner,
+            index,
+            step,
+            workspace,
+            workbench,
+            validator,
+            finish_validator=finish_validator,
+        )
         store.append(
             owner,
             "WORKER_STEP",
@@ -263,6 +296,8 @@ def execute_step(
     workspace: Path,
     workbench: Workbench,
     validator: Callable[[Path], dict[str, Any]] | None,
+    *,
+    finish_validator: Callable[[WorkerStep, int], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     work = workspace / "work"
 
@@ -315,13 +350,24 @@ def execute_step(
         assert validator is not None
         return validator(work)
 
+    def native() -> dict[str, Any]:
+        from jarvis.native_execution import execute_native
+
+        if step.arguments or step.content is not None:
+            raise AdmissionError("native flags/arguments/content cannot be supplied by the worker")
+        return execute_native(store, workbench, workspace, step.path or "", index)
+
     def finish() -> dict[str, Any]:
         missing = [
             f
             for f in [*step.output_files, *([step.final_script] if step.final_script else [])]
             if not safe_path(work, f.removeprefix("work/")).is_file()
         ]
-        return {"status": "OK" if not missing else "MISSING_OUTPUTS", "missing": missing}
+        if missing:
+            return {"status": "MISSING_OUTPUTS", "missing": missing}
+        if finish_validator:
+            return finish_validator(step, index)
+        return {"status": "OK", "missing": []}
 
     if step.tool == "list_files":
         return {"status": "OK", "files": listing(workspace)}
@@ -329,6 +375,7 @@ def execute_step(
         "write_file": write,
         "read_file": read,
         "run_python": run,
+        "run_native": native,
         "validate": validate,
         "finish": finish,
     }[step.tool]
@@ -336,12 +383,19 @@ def execute_step(
         actions=1,
         tool_calls=1,
         compute_units=max(1.0, workbench.environment.limits.wall_seconds / 60)
-        if step.tool in {"run_python", "validate"}
+        if step.tool in {"run_python", "run_native", "validate"}
         else 1,
         wall_seconds=workbench.environment.limits.wall_seconds
-        if step.tool in {"run_python", "validate"}
+        if step.tool in {"run_python", "run_native", "validate"}
         else 10,
     )
+    if step.tool == "run_native":
+        reserved = reserved.model_copy(
+            update={
+                "compute_units": reserved.compute_units * 2,
+                "wall_seconds": reserved.wall_seconds * 2,
+            }
+        )
     outcome = local_job(
         store,
         owner,

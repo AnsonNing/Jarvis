@@ -45,6 +45,63 @@ Curator turns recurring guidance into `owner_preference` lessons.
 
 ## 4. Running sessions
 
+New CLI declarations enable `runtime: {}` by default. This pins bounded context and
+prompt admission, finite provider retry/backoff, and preflight for nested clean
+analysis reruns. Optional fields are absent in old persisted sessions; do not retrofit
+their identities. Library callers may opt in with `RuntimeControls`.
+
+Native worker execution requires an explicitly declared `analysis_environment.native`
+with compiler path/hash and fixed flags, plus the needed read-only toolchain mounts.
+An installed compiler alone does not grant the worker a callable tool. `run_native`
+takes a saved `work/` C++ path, no custom command/flags; its trusted receipt is mounted
+under `inputs/` for analysis. Inspect the receipt's source identity and scope before
+claiming behavioral evidence. A clean Python summary rerun does not recompile.
+
+`autonomy run` automatically exports a sealed report/markdown/checksum manifest on
+closed, partial, paused, cancelled, unavailable and interrupted exits. Its response
+contains `delivery.directory`; the store also has `deliveries/OWNER/latest.json`.
+Report `runtime_exit.exit`, pending work, recovery history and resume point when a
+session stops. `workflow_complete` and the research validation verdict are separate.
+No extra provider call is needed to assemble this package. Prompt bytes are an
+admission estimate; report actual or explicitly unknown/settled token usage.
+
+Decision repairs receive the rejected draft (explicitly partial if large), exact
+validation feedback and the new context identity. Existing hypotheses belong to
+their declared question: use `question: null` and its existing IDs on a new branch.
+An already observed matched baseline is a visible comparison reference, not a new
+experiment. Rejected draft references do not grant evidence visibility.
+
+Provider-ended failures and invalid decisions have separate finite allowances;
+`runtime_exit.stop_details` records which one ended. Counts and receipts survive
+another runner invocation. `resume` changes owner control only: it cannot clear
+`NEEDS_ATTENTION`/`BUDGET_EXHAUSTED` or change a pinned runtime. Diagnose a terminal
+session before proposing any continuation. Reservation settlements are estimates,
+not observed provider usage or billing.
+
+An unattended engineering check is available at
+`examples/autonomy/runtime.declaration.yaml`. Start it in a fresh private store and
+run its returned owner once. It performs actual isolated native execution with
+scripted roles, a negative/alternative toy comparison and frozen confirmation.
+It authorizes no real research, provider, Iris or Dream calls.
+
+For new collaborative research declarations, use `research_planning: {}` (see
+[P20](implementation/P20-collaborative-research-planning.md)). Do not add it to an
+already declared session: its contract and runtime remain immutable. The owner can
+state goals and tradeoffs in ordinary language; the operator supplies the declaration.
+There is no required number of branches or routine approval checklist.
+
+For IMPLEMENT, cite the analysis result or exact canonical definition/threshold tables in
+`evidence_refs`; the worker receives those admissible records and the cited analysis
+'s registered visible tables in `inputs/`. Use `analyzable_evidence_ids` for ANALYZE
+inputs; role/critique receipts are citations, not workspace input records. Preserve a
+no-edit worker limitation as a limitation, rather than a failed scientific hypothesis.
+
+If `status.owner_checkpoint` contains a question, show the owner that question and
+the direction comparison. Record the reply with `advise` (or `--redirect`), then
+`resume` and run in the background. This continues the same session with its branches
+open. Resume alone does not invent an answer. A branch closure is not a mission-wide
+negative verdict; use the recorded planning/stop basis when explaining completion.
+
 - Start research only when the owner asks. `autonomy start DECL` only declares a session.
 - Run it in the background and check on it, never in a blocking foreground call:
   `autonomy run OWNER --wall-seconds N`. One process per session; if `status` shows it running,
@@ -52,7 +109,14 @@ Curator turns recurring guidance into `owner_preference` lessons.
 - `pause`, `resume`, `cancel` are immediate and recorded.
 - Do not edit Jarvis or the domain adapter while a session runs: the runtime identity changes and the
   session stops. Declare a new session after code changes.
-- Long LLM or backend outages pause the session; `run` again resumes it.
+- Proved transient failures/refusals receive finite in-run retries. Persistent
+  outages return a partial delivery. Unknown remote completion remains blocked for
+  reconciliation. A hard process/machine kill still needs a process launcher to
+  restart the same session; no background service is installed by Jarvis.
+- A surrounding monitor must not treat a transient `PROVIDER_UNAVAILABLE` view
+  as a finished runner while its process is still alive. Allow its finite retries
+  and final export to finish; then use exit status and delivery. Owner stop control
+  remains authoritative. Startup files saying `STARTED` do not prove liveness.
 
 ## 5. Costs and permissions
 

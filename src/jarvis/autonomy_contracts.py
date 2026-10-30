@@ -10,7 +10,8 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, model_validator
 
 from jarvis.contracts import Budget, Record
-from jarvis.research_contract import Name, QuestionSpec, Ref
+from jarvis.research_contract import HypothesisSpec, Name, QuestionSpec, Ref
+from jarvis.runtime_controls import RuntimeControls
 from jarvis.workbench import AnalysisEnvironment
 
 ActionKind = Literal[
@@ -124,6 +125,67 @@ class Grants(Record):
         return self
 
 
+class AnalysisDelivery(Record):
+    """Opt-in v1 delivery gate; absent fields preserve historical session semantics."""
+
+    kind: Literal["VerifiedAnalysisDelivery"] = "VerifiedAnalysisDelivery"
+    require_tables: bool = True
+    require_reproduction: bool = True
+    review_evidence: bool = True
+    capture_submitted_source: bool = Field(default=False, exclude_if=lambda value: value is False)
+
+
+class ResearchStages(Record):
+    """Explicit exposed-data stages. Confirmation is not an independent locked test."""
+
+    kind: Literal["ResearchStages"] = "ResearchStages"
+    screening: tuple[Name, ...] = Field(default=(), max_length=8)
+    selection: Name
+    confirmation: tuple[Name, ...] = Field(default=(), max_length=8)
+
+    @model_validator(mode="after")
+    def distinct(self) -> "ResearchStages":
+        periods = [*self.screening, self.selection, *self.confirmation]
+        if len(periods) != len(set(periods)):
+            raise ValueError("research stages must use distinct periods")
+        return self
+
+
+class ResearchPlanning(Record):
+    """Opt-in collaborative planning; no branch quotas or automatic search expansion."""
+
+    kind: Literal["CollaborativeResearchPlanning"] = "CollaborativeResearchPlanning"
+
+
+class ResearchDirection(Record):
+    """A proposed direction and qualitative priority, never an observed result."""
+
+    direction_id: Name
+    kind: BranchKind
+    hypothesis: HypothesisSpec
+    next_action: ActionKind
+    effort: Literal["low", "medium", "high"]
+    disposition: Literal["ready", "deferred", "blocked", "retired"]
+    reason: str = Field(min_length=1, max_length=1200)
+    origin: Literal["agent_proposed", "human_provided", "declared_fixture"]
+
+
+class PlanningReview(Record):
+    summary: str = Field(min_length=1, max_length=1600)
+    directions: tuple[ResearchDirection, ...] = Field(max_length=8)
+    selected_direction_id: Name | None = None
+    selection_reason: str = Field(min_length=1, max_length=1600)
+    stop_basis: Literal["goal_met", "no_justified_next_step", "owner_checkpoint"] | None = None
+    owner_question: str | None = Field(default=None, min_length=1, max_length=1600)
+
+    @model_validator(mode="after")
+    def distinct(self) -> "PlanningReview":
+        ids = [d.direction_id for d in self.directions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("planning direction IDs must be distinct")
+        return self
+
+
 class AutonomyContract(Record):
     kind: Literal["AutonomousResearchContract"] = "AutonomousResearchContract"
     task_id: Name
@@ -146,6 +208,11 @@ class AutonomyContract(Record):
     grants: Grants = Grants()
     constraints: tuple[str, ...] = Field(min_length=1, max_length=24)
     origin: Literal["human_provided", "declared_fixture"]
+    analysis_delivery: AnalysisDelivery | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stages: ResearchStages | None = Field(default=None, exclude_if=lambda value: value is None)
+    planning: ResearchPlanning | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def references(self) -> "AutonomyContract":
@@ -160,6 +227,12 @@ class AutonomyContract(Record):
                 raise ValueError("duplicate declared name")
         if len({p.name for p in self.acceptance_profiles}) != len(self.acceptance_profiles):
             raise ValueError("duplicate acceptance profile")
+        if self.stages and set(self.periods) != {
+            *self.stages.screening,
+            self.stages.selection,
+            *self.stages.confirmation,
+        }:
+            raise ValueError("every declared period must have exactly one research stage")
         return self
 
 
@@ -235,7 +308,7 @@ class ImplementAction(ActionBase):
 
 class CompareAction(ActionBase):
     kind: Literal["COMPARE"] = "COMPARE"
-    result_refs: tuple[Ref, ...] = Field(min_length=2, max_length=32)
+    result_refs: tuple[Ref, ...] = Field(min_length=1, max_length=32)
     baseline_result_ref: Ref
 
 
@@ -258,10 +331,22 @@ class BranchClosure(Record):
 
 class StopAction(ActionBase):
     kind: Literal["STOP"] = "STOP"
-    scope: Literal["branch", "session"]
+    scope: Literal["branch", "session", "checkpoint"]
     conclusion: Literal["negative", "inconclusive", "research_complete", "blocked"]
-    closures: tuple[BranchClosure, ...] = Field(min_length=1, max_length=24)
+    closures: tuple[BranchClosure, ...] = Field(max_length=24)
     finalist_result_ref: Ref | None = None
+
+    @model_validator(mode="after")
+    def closure_scope(self) -> "StopAction":
+        if self.scope != "checkpoint" and not self.closures:
+            raise ValueError("branch/session stops require branch closures")
+        if self.scope == "checkpoint" and (
+            self.closures
+            or self.finalist_result_ref is not None
+            or self.conclusion not in {"inconclusive", "blocked"}
+        ):
+            raise ValueError("owner checkpoints leave branches open and select no finalist")
+        return self
 
 
 AutonomyAction = Annotated[
@@ -291,6 +376,9 @@ class AutonomyDecision(Record):
     question: QuestionSpec | None
     guidance_responses: tuple[GuidanceResponse, ...] = Field(max_length=12)
     action: AutonomyAction
+    planning_review: PlanningReview | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class HypothesisVerdict(Record):
@@ -386,3 +474,4 @@ class AutonomySessionSpec(Record):
     role_config: dict[str, Any] = Field(default_factory=dict)
     # Pinned cross-session memory (lessons, prior experiments/candidates/tables, skills).
     memory_ref: Ref | None = Field(default=None, exclude_if=lambda value: value is None)
+    runtime: RuntimeControls | None = Field(default=None, exclude_if=lambda value: value is None)

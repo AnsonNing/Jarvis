@@ -1,5 +1,21 @@
 # Jarvis
 
+[Bounded native runtime and automatic delivery](docs/implementation/P21-bounded-native-runtime.md)
+add a declared C++ compile/run tool, bounded role contexts, finite receipt-based
+recovery and provider-free evidence packages on runner exits. New CLI sessions use
+the runtime envelope; historical session identities remain unchanged. The shipped
+runtime fixture uses only scripted roles and synthetic inputs.
+
+[Collaborative research planning](docs/implementation/P20-collaborative-research-planning.md)
+adds a small direction comparison at important decisions, separate branch/task stop
+reviews and resumable owner questions. No fixed search breadth or routine approvals
+are required; existing research records remain unchanged.
+
+[Verified analysis delivery and staged conclusions](docs/implementation/P19-trusted-research-delivery.md)
+add opt-in clean-rerun delivery gates, bounded trusted Critic evidence, explicit
+screening/selection/confirmation periods and frozen-candidate confirmation. Existing
+session records retain their original contracts and reporting rules.
+
 **Jarvis — Autonomous, Evidence-Driven, Self-Improving Research Agent System**
 
 Jarvis is an executable, domain-extensible research platform. **Version 0.15 adds autonomous research sessions:** give Jarvis a baseline, a goal, a budget and what may change, and a Director chooses among reading source, agentic analysis in an OS-isolated workbench, explicit backtest matrices, model retraining, code changes to strategy rules or the training pipeline, and multi-objective comparison. An independent Critic reviews each result, the owner can advise at any time (every item must be answered), a stop guard prevents premature stops, and the session ends with a reproducible research deliverable. Dream-RSI now improves the action-selection policy itself, with paired fresh validation on a hidden holdout, adoption, canary and rollback. See the [autonomous research guide](docs/implementation/P16-autonomous-research.md); it is verified end to end on a synthetic Hermes-like world and starts no real Hermes research. Sessions now accumulate: every ended session is written to a per-domain knowledge base (trusted facts, evidence-linked lessons, versioned skills promoted from reproducible analyses), new sessions start from that memory with skills mounted in their workbench, and Dream-RSI can learn from those real histories and adopt into the domain policy registry used by every later session ([P18](docs/implementation/P18-research-memory.md)).

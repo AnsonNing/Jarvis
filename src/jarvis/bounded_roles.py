@@ -8,6 +8,8 @@ from jarvis.identity import digest
 from jarvis.providers import ResearchProvider
 from jarvis.research_roles import RoleCaller, strict_schema
 from jarvis.researcher import AgentConfig
+from jarvis.role_feedback import correction_context, validation_feedback
+from jarvis.runtime_controls import bounded_context
 from jarvis.storage import Store
 
 
@@ -37,7 +39,11 @@ def evidence_role(
             if validate:
                 validate(answer, store.artifacts.get(known["context_ref"]))
             return answer
-        frozen = {**context, **({"correction": correction} if correction else {})}
+        frozen = bounded_context(
+            store,
+            {**context, **({"correction": correction} if correction else {})},
+            config.max_context_bytes,
+        )
         prior = next((p for p in events("LAB_ROLE_REQUESTED") if p["key"] == attempt_key), None)
         if prior is None:
             schema = strict_schema(model)
@@ -92,6 +98,7 @@ def evidence_role(
                     "receipt_ref": response["receipt_ref"],
                     "reason": str(exc)[:1200],
                     "attempt": attempt,
+                    "validation": validation_feedback(exc),
                 }
                 store.append(owner, "LAB_ROLE_REJECTED", rejected)
             else:
@@ -105,9 +112,5 @@ def evidence_role(
                     },
                 )
                 return answer
-        correction = {
-            "rejected_answer_ref": rejected["answer_ref"],
-            "reason": rejected["reason"],
-            "instruction": "Repair the known invalid answer using exact allowed evidence IDs. Do not invent references, change measurements or rerun experiments. Original answer and cost remain recorded.",
-        }
+        correction = correction_context(store, rejected)
     raise AdmissionError("known invalid role answer exceeded two corrective attempts")

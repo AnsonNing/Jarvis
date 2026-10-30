@@ -7,3 +7,6 @@ adapter_args:
 agent: fixture          # "codex" uses the local Codex CLI for every role
 max_decisions: 30
 max_concurrent_actions: 1
+analysis_delivery: {}   # require evidence tables and a passing clean script rerun
+research_stages:
+  selection: dev       # this fixture has only exposed/synthetic development data

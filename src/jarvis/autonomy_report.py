@@ -40,6 +40,14 @@ def session_outcome(store: Store, owner: str) -> dict[str, Any]:
         and (o.get("evaluator_id"), o.get("dataset_id"))
         == (contract.evaluator_id, contract.dataset_id)
     ]
+    if contract.stages is not None:
+        from jarvis.autonomy_stages import staged_outcome
+
+        return {
+            **staged_outcome(store, owner, contract, rows),
+            "usage": store.resource_totals_tree(owner),
+            "decisions": len(_payloads(store, owner, "AUTONOMY_DECISION")),
+        }
     period = contract.periods[0]
     baseline = next(
         (
@@ -113,9 +121,59 @@ def verify_session(store: Store, owner: str) -> dict[str, Any]:
                 raise IntegrityError("pending owner guidance was not answered")
             if not set(decision.action.evidence_refs) <= set(context["visible_evidence_ids"]):
                 raise IntegrityError("decision cited invisible evidence")
+            from jarvis.autonomy_planning import validate_planning
+
+            _, contract = _contract(store, owner)
+            try:
+                validate_planning(store, contract, known, decision, context)
+            except ValueError as exc:
+                raise IntegrityError("invalid decision-time planning: " + str(exc)) from exc
         elif event["event_type"] == "ACTION_REVIEWED":
             if p["review_ref"] not in recorded:
                 raise IntegrityError("review lacks its separate role receipt")
+        elif event["event_type"] == "REVIEW_EVIDENCE_PACKED":
+            evidence = store.artifacts.get(p["evidence_ref"])
+            before = engine.state(owner, before_sequence=event["sequence"])
+            if evidence["result_ref"] != p["result_ref"] or not set(evidence["source_refs"]) <= set(
+                before["visible"]
+            ):
+                raise IntegrityError("review bundle escaped its recorded evidence boundary")
+            for table in evidence["tables"]:
+                if table["table_ref"] not in before["visible"]:
+                    raise IntegrityError("review table was not available when the bundle was built")
+                store.blobs.get(table["blob_ref"])
+            for script in evidence["scripts"]:
+                store.blobs.get(script["blob_ref"])
+        elif event["event_type"] == "CONFIRMATION_CANDIDATE_FROZEN":
+            from jarvis.autonomy_stages import configuration, staged_outcome
+
+            _, contract = _contract(store, owner)
+            if contract.stages is None:
+                raise IntegrityError("confirmation freeze requires declared research stages")
+            before = engine.state(owner, before_sequence=event["sequence"])
+            rows = [
+                {**store.artifacts.get(r), "result_ref": r}
+                for r in before["observations"]
+                if store.artifacts.get(r)["status"] == "SUCCEEDED"
+                and (store.artifacts.get(r)["evaluator_id"], store.artifacts.get(r)["dataset_id"])
+                == (contract.evaluator_id, contract.dataset_id)
+            ]
+            selected = staged_outcome(store, owner, contract, rows)
+            winner = selected["selection_finalist"]
+            if (
+                winner.get("status") != "SELECTED"
+                or winner["result_ref"] != p["selection_result_ref"]
+            ):
+                raise IntegrityError(
+                    "confirmation freeze does not match the decision-time selection"
+                )
+            if (
+                configuration(
+                    store, contract, winner["candidate_ref"], selected["selection_settings"]
+                )
+                != p["configuration_id"]
+            ):
+                raise IntegrityError("confirmation freeze changed candidate/settings")
     state = engine.state(owner)
     for index, child in state["launched"].items():
         if store.manifest(child)["budget_owner"] != owner:
@@ -124,11 +182,36 @@ def verify_session(store: Store, owner: str) -> dict[str, Any]:
         if index in state["completed"]:
             if not results or results[0]["result_ref"] != state["completed"][index]["result_ref"]:
                 raise IntegrityError("action result lineage changed")
+            _, contract = _contract(store, owner)
+            value = store.artifacts.get(results[0]["result_ref"])
+            if contract.analysis_delivery and value.get("delivery_status") == "VERIFIED":
+                if not value.get("scripts") or not value.get("outputs"):
+                    raise IntegrityError("verified analysis lacks its delivered scripts/outputs")
+                if contract.analysis_delivery.require_tables and not value.get("output_tables"):
+                    raise IntegrityError("verified analysis lacks evidence tables")
+                if contract.analysis_delivery.require_reproduction and not (
+                    value.get("reproducible", {}).get("status") == "PASS"
+                    and value["reproducible"].get("all_identical") is True
+                ):
+                    raise IntegrityError("verified analysis lacks a passing clean rerun")
         verify_roles(store, child)
         verify_local_jobs(store, child)
         for step in _payloads(store, child, "WORKER_STEP"):
-            store.artifacts.get(step["step_ref"])
-            store.artifacts.get(step["observation_ref"])
+            request = store.artifacts.get(step["step_ref"])
+            observation = store.artifacts.get(step["observation_ref"])
+            if (
+                request["tool"] == "run_native"
+                and observation.get("kind") == "NativeExecutionReceipt"
+            ):
+                sealed = store.artifacts.get(observation["receipt_ref"])
+                if sealed != {
+                    k: v for k, v in observation.items() if k not in {"receipt_ref", "input_path"}
+                }:
+                    raise IntegrityError("native execution receipt changed")
+                for path, ref in sealed["source_blobs"].items():
+                    store.blobs.get(ref)
+                    if ref != sealed["source_manifest"][path]:
+                        raise IntegrityError("native source bytes changed during execution")
     verify_roles(store, owner)
     verify_local_jobs(store, owner)
     status = store.status(owner)
@@ -178,6 +261,22 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def active_research_directions(
+    store: Store, state: dict[str, Any], *, respect_closures: bool
+) -> list[str]:
+    """Keep historical reviews, but do not reopen explicitly closed staged branches."""
+    return sorted(
+        {
+            question
+            for index, review in state["reviews"].items()
+            if not respect_closures
+            or state["branches"].get(state["completed"][index]["branch_id"], {}).get("status")
+            != "closed"
+            for question in store.artifacts.get(review["review_ref"])["next_questions"]
+        }
+    )
+
+
 def deliverable(store: Store, owner: str) -> dict[str, Any]:
     from jarvis.autonomous_research import AutonomousResearch
 
@@ -222,12 +321,8 @@ def deliverable(store: Store, owner: str) -> dict[str, Any]:
             }
         )
     stops = _payloads(store, owner, "SESSION_STOPPED")
-    next_questions = sorted(
-        {
-            q
-            for r in state["reviews"].values()
-            for q in store.artifacts.get(r["review_ref"])["next_questions"]
-        }
+    next_questions = active_research_directions(
+        store, state, respect_closures=contract.stages is not None or contract.planning is not None
     )
     verdict = (
         "DEVELOPMENT_IMPROVEMENT"
@@ -236,6 +331,8 @@ def deliverable(store: Store, owner: str) -> dict[str, Any]:
         if outcome["status"] == "COMPARED"
         else "INSUFFICIENT_EVIDENCE"
     )
+    if contract.stages and outcome.get("stage_gate") == "AWAITING_CONFIRMATION":
+        verdict = "INSUFFICIENT_EVIDENCE"
     report = {
         "kind": "ResearchDeliverable",
         "session": owner,
@@ -268,7 +365,38 @@ def deliverable(store: Store, owner: str) -> dict[str, Any]:
         "usage": outcome["usage"],
         "decisions": outcome["decisions"],
         "policy_ref": spec.policy_ref,
+        **(
+            {
+                "control": store.get_control(owner),
+                "planning": plan["planning"],
+                "planning_reviews": [
+                    {
+                        "index": p["index"],
+                        "decision_ref": p["decision_ref"],
+                        "review": d["planning_review"],
+                    }
+                    for p in state["decisions"]
+                    if (d := store.artifacts.get(p["decision_ref"])).get("planning_review")
+                    is not None
+                ],
+            }
+            if contract.planning
+            else {}
+        ),
+        **(
+            {"review_evidence": [p["evidence_ref"] for p in state["review_evidence"].values()]}
+            if state["review_evidence"]
+            else {}
+        ),
     }
+    if contract.stages:
+        report.update(
+            research_stages=outcome["stages"],
+            stage_gate=outcome["stage_gate"],
+            selection_finalist=outcome["selection_finalist"],
+            confirmation=outcome["confirmation"],
+            independent_validation="NOT_RUN",
+        )
     report["markdown"] = render_markdown(report)
     return report
 
@@ -341,7 +469,18 @@ def render_markdown(r: dict[str, Any]) -> str:
             + f"\n\nmodel={row['model_id']}；data={row['data_policy']}；result `{finalist['result_ref'][7:19]}`"
         )
     else:
-        lines.append("沒有候選通過任何 acceptance profile。")
+        lines.append(
+            "候選尚未通過所有宣告階段；目前不足以形成任務成果。"
+            if r.get("stage_gate") == "AWAITING_CONFIRMATION"
+            else "沒有候選通過所有必要的 acceptance 與階段門檻。"
+        )
+    if r.get("research_stages"):
+        lines += ["", "## 研究階段", f"- 總門檻：{r['stage_gate']}"]
+        for period, stage in r["research_stages"].items():
+            lines.append(f"- {period} ({stage['stage']}): {stage['status']}")
+        for check in r["confirmation"]:
+            lines.append(f"- confirmation {check['period']}: {check['verdict']}")
+        lines.append("- 獨立驗證：NOT_RUN；已曝光期間的確認仍屬開發證據。")
     if r["owner_guidance"]:
         lines += ["", "## 人類建議與回應"]
         for g in r["owner_guidance"]:
@@ -349,6 +488,24 @@ def render_markdown(r: dict[str, Any]) -> str:
             lines.append(
                 f"- {g['guidance_id']}: {g['text']} → {'採納' if resp and resp['adopted'] else '未採納'}：{resp['response'] if resp else '-'}"
             )
+    if r.get("planning"):
+        board = r["planning"]
+        latest = board["latest_review"]
+        lines += ["", "## 方向比較與任務停止理由"]
+        if latest:
+            review = latest["review"]
+            lines += [review["summary"], "", review["selection_reason"]]
+            for direction in review["directions"]:
+                lines.append(
+                    f"- {direction['direction_id']} ({direction['kind']}): {direction['disposition']}；下一步 {direction['next_action']}；預估投入 {direction['effort']}；{direction['reason']}"
+                )
+            if review["stop_basis"]:
+                lines.append(f"- 任務停止依據：{review['stop_basis']}")
+        if board["owner_checkpoint"]:
+            lines.append("- 等待使用者指引：" + board["owner_checkpoint"]["question"])
+        lines.append(
+            "方向與投入是研究提案及估計；未執行方向沒有觀測績效。分支關閉不等於整體搜尋已窮盡。"
+        )
     lines += ["", "## 後續方向"] + [
         f"- {q}" for q in r["next_research_directions"] or ["（Critic 未提出）"]
     ]

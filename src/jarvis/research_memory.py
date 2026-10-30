@@ -160,7 +160,7 @@ class KnowledgeBase:
     def facts(self, session: str) -> dict[str, Any]:
         """Trusted, LLM-free record of what the session observed and produced."""
         from jarvis.autonomous_research import AutonomousResearch
-        from jarvis.autonomy_report import session_outcome
+        from jarvis.autonomy_report import active_research_directions, session_outcome
 
         engine = AutonomousResearch.__new__(AutonomousResearch)
         engine.store = self.store
@@ -205,12 +205,10 @@ class KnowledgeBase:
                         "scripts": sorted(result.get("scripts", {})),
                     }
                 )
-        questions = sorted(
-            {
-                q
-                for r in state["reviews"].values()
-                for q in self.store.artifacts.get(r["review_ref"])["next_questions"]
-            }
+        questions = active_research_directions(
+            self.store,
+            state,
+            respect_closures=bool(contract.get("stages") or contract.get("planning")),
         )[:12]
         guidance = []
         for p in _payloads(self.store, session, "GUIDANCE_RECORDED"):
@@ -257,6 +255,11 @@ class KnowledgeBase:
             "open_questions": questions,
             "owner_guidance": guidance,
             "usage": outcome["usage"]["actual"],
+            **(
+                {"planning": engine.plan(session, state)["planning"]}
+                if contract.get("planning")
+                else {}
+            ),
         }
 
     # ------------------------------------------------------------------ consolidation

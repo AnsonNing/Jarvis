@@ -69,6 +69,8 @@ def describe(policy: ResearchPolicy) -> dict[str, Any]:
 def enforce(policy: ResearchPolicy, state: dict[str, Any], decision: AutonomyDecision) -> None:
     """Raise ValueError with a correction when a decision violates the active policy."""
     action = decision.action
+    if action.kind == "STOP" and action.scope == "checkpoint":
+        return  # method quotas cannot prevent a tool-free owner handoff
     history: list[dict[str, Any]] = state["history"]
     if action.kind == "BACKTEST":
         if policy.max_consecutive_backtests:

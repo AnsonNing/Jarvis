@@ -52,10 +52,13 @@ from jarvis.candidates import compare_results, select_finalist
 from jarvis.contracts import AdmissionError, BudgetExceeded, IntegrityError, JarvisError, Record
 from jarvis.identity import digest, file_digest, raw_digest
 from jarvis.lab_contracts import ExpertOpinion
+from jarvis.native_execution import capability as native_capability
 from jarvis.research_executors import Executors, resolve_candidate
 from jarvis.researcher import AgentConfig
+from jarvis.role_feedback import DecisionAdmissionError, correction_context, failure_category
+from jarvis.runtime_controls import ContextEnvelopeExceeded
 from jarvis.storage import Store
-from jarvis.workspace_agent import prepare_workspace, run_workspace_task
+from jarvis.workspace_agent import WorkerStep, prepare_workspace, run_workspace_task
 
 ASYNC_KINDS = {"ANALYZE", "BACKTEST", "TRAIN_MODEL", "IMPLEMENT"}
 REVIEWED_KINDS = {"ANALYZE", "BACKTEST", "TRAIN_MODEL", "IMPLEMENT", "COMPARE"}
@@ -137,7 +140,16 @@ def default_role_config() -> dict[str, Any]:
 
 def role_config(spec: AutonomySessionSpec, role: str) -> AgentConfig:
     merged = {**default_role_config(), **spec.role_config}
-    return AgentConfig.model_validate(merged[role])
+    config = AgentConfig.model_validate(merged[role])
+    if spec.runtime:
+        config = config.model_copy(
+            update={
+                "max_context_bytes": spec.runtime.max_context_bytes,
+                "max_prompt_bytes": spec.runtime.max_prompt_bytes,
+                "provider_retries": spec.runtime.provider_retries,
+            }
+        )
+    return config
 
 
 def contract_of(store: Store, spec: AutonomySessionSpec) -> AutonomyContract:
@@ -207,6 +219,21 @@ class AutonomousResearch:
     # ------------------------------------------------------------------ creation
     def create(self, spec: AutonomySessionSpec, *, budget_owner: str | None = None) -> str:
         contract = contract_of(self.store, spec)
+        if spec.runtime and contract.analysis_delivery and "ANALYZE" in contract.grants.actions:
+            if spec.budget.max_parallel_jobs < spec.max_concurrent_actions + 1:
+                raise AdmissionError(
+                    "runtime preflight: strict analysis finish/rerun needs a nested job slot in addition to concurrent actions"
+                )
+        if spec.runtime:
+            if contract.analysis_environment.native != self.executors.workbench.environment.native:
+                raise AdmissionError("runtime preflight: native declaration differs from executor")
+            if (
+                contract.analysis_environment.native
+                and not native_capability(self.executors.workbench)["available"]
+            ):
+                raise AdmissionError(
+                    "runtime preflight: declared native capability unavailable or changed"
+                )
         baseline = Candidate.model_validate(
             self.store.artifacts.get(contract.baseline_candidate_ref)
         )
@@ -285,6 +312,7 @@ class AutonomousResearch:
             "launched": {},
             "completed": {},
             "reviews": {},
+            "review_evidence": {},
             "branches": {},
             "questions": {},
             "guidance": {},
@@ -296,6 +324,8 @@ class AutonomousResearch:
             "models": [],
             "failures": [],
             "completion_order": [],
+            "planning_review": None,
+            "owner_checkpoint": None,
         }
         for event in self.store.events(owner):
             if before_sequence is not None and event["sequence"] >= before_sequence:
@@ -304,9 +334,18 @@ class AutonomousResearch:
             if kind == "GUIDANCE_RECORDED":
                 state["guidance"][p["guidance_id"]] = self.store.artifacts.get(p["guidance_ref"])
                 visible.append(p["guidance_ref"])
+                if state["owner_checkpoint"] is not None:
+                    state["owner_checkpoint"]["has_owner_reply"] = True
             elif kind == "AUTONOMY_DECISION":
                 state["decisions"].append(p)
                 decision = self.store.artifacts.get(p["decision_ref"])
+                if state["owner_checkpoint"] is not None:
+                    state["owner_checkpoint"] = None
+                if decision.get("planning_review") is not None:
+                    state["planning_review"] = {
+                        "index": p["index"],
+                        "review": decision["planning_review"],
+                    }
                 for response in decision["guidance_responses"]:
                     state["responses"][response["guidance_id"]] = {**response, "index": p["index"]}
                 if decision["branch"]:
@@ -329,6 +368,16 @@ class AutonomousResearch:
                 state["completed"][p["index"]] = p
                 state["completion_order"].append(p["index"])
                 visible.append(p["result_ref"])
+                if p["kind"] == "STOP" and contract.planning:
+                    decision = self.store.artifacts.get(
+                        state["decisions"][p["index"]]["decision_ref"]
+                    )
+                    if decision["action"]["scope"] == "checkpoint":
+                        state["owner_checkpoint"] = {
+                            "index": p["index"],
+                            "question": decision["planning_review"]["owner_question"],
+                            "has_owner_reply": False,
+                        }
             elif kind == "ARTIFACTS_REGISTERED":
                 for key in ("tables", "candidates", "observations", "patches", "models"):
                     state[key].extend(p[key])
@@ -336,10 +385,19 @@ class AutonomousResearch:
             elif kind == "ACTION_REVIEWED":
                 state["reviews"][p["index"]] = p
                 visible.append(p["review_ref"])
+            elif kind == "REVIEW_EVIDENCE_PACKED":
+                state["review_evidence"][p["index"]] = p
+                visible.append(p["evidence_ref"])
             elif kind == "BRANCH_CLOSED":
                 if p["branch_id"] in state["branches"]:
                     state["branches"][p["branch_id"]]["status"] = "closed"
                     state["branches"][p["branch_id"]]["closure"] = p
+            elif kind == "OWNER_CHECKPOINT_REQUESTED":
+                state["owner_checkpoint"] = {
+                    "index": p["index"],
+                    "question": p["question"],
+                    "has_owner_reply": False,
+                }
         memory = self.memory(spec)
         if memory:
             state["candidates"] = list(dict.fromkeys([*state["candidates"], *memory["candidates"]]))
@@ -508,6 +566,10 @@ class AutonomousResearch:
                 "concerns": value["concerns"],
                 "next_questions": value["next_questions"],
             }
+        if detail >= 2 and index in state["review_evidence"]:
+            summary["trusted_review_evidence"] = self.store.artifacts.get(
+                state["review_evidence"][index]["evidence_ref"]
+            )
         return summary
 
     def director_context(self, owner: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -530,7 +592,7 @@ class AutonomousResearch:
         resources = self.store.resource_totals_tree(owner)
         shown = self._memory_shown(contract, state)
         hidden = set(shown["all"]) - set(shown["refs"])
-        return {
+        context = {
             "research_contract": contract.model_dump(mode="json"),
             "contract_ref": spec.contract_ref,
             "research_policy": describe(policy),
@@ -593,11 +655,13 @@ class AutonomousResearch:
             ],
             "pending_guidance_ids": state["pending_guidance"],
             "available_actions": list(contract.grants.actions),
+            "analyzable_evidence_ids": sorted(self._analyzable(state) - hidden),
             "executors_available": {
                 "backtest": self.executors.backtester is not None,
                 "train_model": self.executors.trainer is not None,
                 "implement_targets": sorted(self.executors.validators),
                 "analysis_workbench": True,
+                "native_execution": native_capability(self.executors.workbench),
             },
             "budget": {
                 "limits": spec.budget.model_dump(mode="json"),
@@ -609,6 +673,21 @@ class AutonomousResearch:
             "stop_rule": "A session STOP must close every open branch with evidence; research_complete requires a compared finalist. Running actions must finish first.",
             "visible_evidence_ids": [r for r in state["visible"] if r not in hidden],
         }
+        if contract.stages:
+            from jarvis.autonomy_report import session_outcome
+            from jarvis.autonomy_stages import frozen_candidate
+
+            outcome = session_outcome(self.store, owner)
+            context["stage_progress"] = {
+                "plan": contract.stages.model_dump(mode="json"),
+                "gate": outcome["stage_gate"],
+                "selection_finalist": outcome["selection_finalist"],
+                "selection_settings": outcome["selection_settings"],
+                "confirmation": outcome["confirmation"],
+                "frozen_candidate": frozen_candidate(self.store, owner),
+                "independent_validation": "NOT_RUN",
+            }
+        return context
 
     def _memory_shown(self, contract: AutonomyContract, state: dict[str, Any]) -> dict[str, Any]:
         """Bounded recall: the latest same-dataset experiments with their tables and candidates.
@@ -750,7 +829,12 @@ class AutonomousResearch:
                     if a["hypothesis_id"] in {h["hypothesis_id"] for h in q["hypotheses"]}:
                         verdicts.append(a)
             questions.append({**q, "verdicts": verdicts})
-        return {"branches": branches, "questions": questions}
+        plan: dict[str, Any] = {"branches": branches, "questions": questions}
+        if contract_of(self.store, self.spec(owner)).planning is not None:
+            from jarvis.autonomy_planning import planning_view
+
+            plan["planning"] = planning_view(self.store, state)
+        return plan
 
     # ------------------------------------------------------------------ validation
     def validate_decision(self, owner: str, answer: Record, frozen: dict[str, Any]) -> None:
@@ -779,11 +863,32 @@ class AutonomousResearch:
         questions = {q["question_id"]: q for q in frozen["research_plan"]["questions"]}
         if answer.question:
             known_h = {h["hypothesis_id"] for q in questions.values() for h in q["hypotheses"]}
-            if answer.question.question_id in questions or any(
-                h.hypothesis_id in known_h or not set(h.evidence_refs) <= visible
-                for h in answer.question.hypotheses
-            ):
-                raise ValueError("question/hypothesis identity exists or cites invisible evidence")
+            catalog = {
+                q: [h["hypothesis_id"] for h in v["hypotheses"]] for q, v in questions.items()
+            }
+            duplicate_h = sorted(
+                h.hypothesis_id for h in answer.question.hypotheses if h.hypothesis_id in known_h
+            )
+            if answer.question.question_id in questions or duplicate_h:
+                raise DecisionAdmissionError(
+                    "EXISTING_RESEARCH_IDENTITY",
+                    "question/hypothesis identity already exists; reuse its question_id with question=null, or declare new unique IDs",
+                    {
+                        "proposed_question_id": answer.question.question_id,
+                        "conflicting_hypothesis_ids": duplicate_h,
+                        "existing_questions": catalog,
+                        "instruction": "A new branch can address an existing question without redeclaring it.",
+                    },
+                )
+            bad_refs = sorted(
+                {r for h in answer.question.hypotheses for r in h.evidence_refs} - visible
+            )
+            if bad_refs:
+                raise DecisionAdmissionError(
+                    "INVISIBLE_HYPOTHESIS_EVIDENCE",
+                    "question cites invisible evidence",
+                    {"invalid_refs": bad_refs},
+                )
             questions[answer.question.question_id] = answer.question.model_dump(mode="json")
         if action.question_id not in questions or not set(action.hypothesis_ids) <= {
             h["hypothesis_id"] for h in questions[action.question_id]["hypotheses"]
@@ -791,6 +896,16 @@ class AutonomousResearch:
             raise ValueError("action must address hypotheses of a declared question")
         if not set(action.evidence_refs) <= visible:
             raise ValueError("cite only visible evidence")
+        from jarvis.autonomy_planning import validate_planning
+
+        validate_planning(self.store, contract, state, answer, frozen)
+        if contract.stages:
+            from jarvis.autonomy_stages import frozen_candidate
+
+            if frozen_candidate(self.store, owner) and action.kind in {"TRAIN_MODEL", "IMPLEMENT"}:
+                raise ValueError(
+                    "confirmation froze candidate generation; declare a new session to tune"
+                )
         decisions = [
             self.store.artifacts.get(p["decision_ref"])["action"] for p in state["decisions"]
         ]
@@ -799,12 +914,14 @@ class AutonomousResearch:
             if not set(action.scopes) <= names:
                 raise ValueError("unknown source scope")
         elif isinstance(action, AnalyzeAction):
-            allowed = self._analyzable(state)
+            allowed = self._analyzable(state) & visible
             if not set(action.input_refs) <= allowed:  # all are recorded, immutable artifacts
                 raise ValueError(
                     "ANALYZE inputs must be registered tables, backtest observations, action results, "
                     "candidates, models or patches; not: "
                     + ", ".join(sorted(set(action.input_refs) - allowed))
+                    + ". Choose input_refs from analyzable_evidence_ids; role/critique receipts "
+                    "may be cited as evidence but are not workspace input records."
                 )
             if any(
                 a["kind"] == "ANALYZE"
@@ -816,7 +933,18 @@ class AutonomousResearch:
                     "this analysis repeats an earlier one; ask a new question or use other inputs"
                 )
         elif isinstance(action, BacktestAction):
-            self._check_backtest(contract, state, action)
+            self._check_backtest(contract, state, action, visible=visible)
+            if contract.stages:
+                from jarvis.autonomy_report import session_outcome
+                from jarvis.autonomy_stages import admit_staged_backtest
+
+                if state["running"] and any(
+                    e.period in contract.stages.confirmation for e in action.experiments
+                ):
+                    raise ValueError("wait for running actions before freezing confirmation")
+                admit_staged_backtest(
+                    self.store, owner, contract, action, session_outcome(self.store, owner)
+                )
         elif isinstance(action, TrainModelAction):
             if self.executors.trainer is None:
                 raise ValueError("no training executor is available")
@@ -866,7 +994,7 @@ class AutonomousResearch:
             if not state["running"]:
                 raise ValueError("WAIT requires a running action")
         elif isinstance(action, StopAction):
-            self._check_stop(contract, state, action, branches, visible)
+            self._check_stop(owner, contract, state, action, branches, visible)
         enforce(policy_of(self.store, spec), self.policy_state(owner, state), answer)
 
     @staticmethod
@@ -876,17 +1004,29 @@ class AutonomousResearch:
         return set().union(*(set(state[k]) for k in keys)) | results
 
     def _check_backtest(
-        self, contract: AutonomyContract, state: dict[str, Any], action: BacktestAction
+        self,
+        contract: AutonomyContract,
+        state: dict[str, Any],
+        action: BacktestAction,
+        *,
+        visible: set[str] | None = None,
     ) -> None:
         if self.executors.backtester is None:
             raise ValueError("no backtest executor is available")
         if len(action.experiments) > contract.grants.max_experiments_per_backtest:
             raise ValueError("too many experiments in one backtest action")
         specs = {s.name: s for s in contract.settings}
-        seen = {
-            (o["candidate_ref"], json.dumps(o["settings"], sort_keys=True), o["period"])
-            for o in (self.store.artifacts.get(r) for r in state["observations"])
-        }
+        seen: dict[tuple[str, str, str], list[str]] = {}
+        for ref in state["observations"]:
+            observation = self.store.artifacts.get(ref)
+            if not self._comparable(contract, ref):
+                continue  # other datasets/evaluators cannot substitute for this experiment
+            key = (
+                observation["candidate_ref"],
+                json.dumps(observation["settings"], sort_keys=True),
+                observation["period"],
+            )
+            seen.setdefault(key, []).append(ref)
         labels = set()
         for experiment in action.experiments:
             if experiment.label in labels:
@@ -913,11 +1053,34 @@ class AutonomousResearch:
                 experiment.period,
             )
             if key in seen:
-                raise ValueError(f"experiment {experiment.label} repeats an observed configuration")
-            seen.add(key)
+                if not seen[key]:
+                    raise DecisionAdmissionError(
+                        "DUPLICATE_BATCH_CONFIGURATION",
+                        "same configuration appears twice in this batch; keep one copy",
+                        {
+                            "label": experiment.label,
+                            "candidate_ref": experiment.candidate_ref,
+                            "period": experiment.period,
+                        },
+                    )
+                refs = [r for r in seen[key] if visible is not None and r in visible]
+                raise DecisionAdmissionError(
+                    "RECORDED_BACKTEST_CONFIGURATION",
+                    f"experiment {experiment.label} repeats an observed configuration; omit it from experiments and cite its visible result_ref as the matched control",
+                    {
+                        "label": experiment.label,
+                        "candidate_ref": experiment.candidate_ref,
+                        "period": experiment.period,
+                        "effective_settings": effective,
+                        "existing_result_refs": refs,
+                        "instruction": "Submit only unobserved configurations. A label containing reuse does not bypass duplicate admission. Inspect a recorded failed/unknown job before any retry; do not assume it is a successful control.",
+                    },
+                )
+            seen[key] = []
 
     def _check_stop(
         self,
+        owner: str,
         contract: AutonomyContract,
         state: dict[str, Any],
         action: StopAction,
@@ -937,12 +1100,24 @@ class AutonomousResearch:
             return
         if state["running"]:
             raise ValueError("stop guard: actions are still running; WAIT for them first")
+        if action.scope == "checkpoint":
+            return  # validated planning review; keep branches open for owner collaboration
         if closures != open_ids:
             raise ValueError(
                 "stop guard: close every open branch with evidence before stopping: "
                 + ", ".join(sorted(open_ids - closures))
             )
         if action.conclusion == "research_complete":
+            if contract.stages:
+                from jarvis.autonomy_report import session_outcome
+
+                outcome = session_outcome(self.store, owner)
+                if outcome.get("stage_gate") != "PASS" or action.finalist_result_ref != outcome[
+                    "finalist"
+                ].get("result_ref"):
+                    raise ValueError(
+                        "stop guard: selection and every required confirmation must pass"
+                    )
             if action.finalist_result_ref not in state["observations"]:
                 raise ValueError(
                     "stop guard: research_complete needs a finalist backtest observation"
@@ -987,6 +1162,10 @@ class AutonomousResearch:
                 raise IntegrityError("declared executors changed; declare a new session")
             try:
                 return self._advance(owner)
+            except ContextEnvelopeExceeded as exc:
+                self.store.append(owner, "SESSION_PARTIAL_STOP", {"reason": str(exc)})
+                self.store.set_status(owner, "NEEDS_ATTENTION")
+                return {"status": "NEEDS_ATTENTION", "reason": str(exc)}
             except BudgetExceeded as exc:
                 self.store.append(owner, "SESSION_PARTIAL_STOP", {"reason": str(exc)})
                 self.store.set_status(owner, "BUDGET_EXHAUSTED")
@@ -994,6 +1173,20 @@ class AutonomousResearch:
 
     def _advance(self, owner: str) -> dict[str, Any]:
         state = self.state(owner)
+        if contract_of(self.store, self.spec(owner)).planning and state["decisions"]:
+            index = len(state["decisions"]) - 1
+            stop_decision = AutonomyDecision.model_validate(self._decision(state, index))
+            if isinstance(stop_decision.action, StopAction) and index in state["completed"]:
+                missing = any(
+                    state["branches"][c.branch_id]["status"] != "closed"
+                    for c in stop_decision.action.closures
+                )
+                if missing or stop_decision.action.scope == "session":
+                    return self._finish_stop(owner, index, stop_decision)
+        checkpoint = state.get("owner_checkpoint")
+        if checkpoint and not checkpoint["has_owner_reply"]:
+            self.store.control(owner, "PAUSED")
+            return {"status": "PAUSED", "owner_question": checkpoint["question"]}
         collected = self._collect(owner, state)
         if collected:
             return collected
@@ -1007,6 +1200,9 @@ class AutonomousResearch:
         if state["decisions"]:
             last = len(state["decisions"]) - 1
             if last not in state["completed"] and last not in state["launched"]:
+                if self._decision(state, last)["action"]["kind"] in ASYNC_KINDS:
+                    child = self._launch(owner, last, state["decisions"][last]["decision_ref"])
+                    return {"status": "ACTION_LAUNCHED", "index": last, "child": child}
                 return self._finish_sync(owner, last)
             if (
                 self._decision(state, last)["action"]["kind"] == "WAIT"
@@ -1028,13 +1224,15 @@ class AutonomousResearch:
 
     def _decide(self, owner: str, state: dict[str, Any]) -> dict[str, Any]:
         index = len(state["decisions"])
-        attempt = sum(f["index"] == index for f in state["failures"])
-        if attempt >= MAX_CONSECUTIVE_FAILURES:
-            self.store.set_status(owner, "NEEDS_ATTENTION")
-            return {"status": "NEEDS_ATTENTION", "reason": "repeated invalid Director decisions"}
+        failures = [f for f in state["failures"] if f["index"] == index]
+        attempt = len(failures)  # monotonic key; never re-dispatch a settled request
+        stopped = self._role_failure_stop(owner, "director", index, failures)
+        if stopped:
+            return stopped
         context = self.director_context(owner, state)
         if attempt:
             context["retry_attempt"] = attempt  # a retry is a distinct, separately receipted call
+            self._carry_rejection(owner, f"decision:{index}:", context)
         pauses = self._pauses(owner, "director", index)
         if pauses:
             context["provider_retry"] = pauses
@@ -1052,13 +1250,20 @@ class AutonomousResearch:
                 policy.guidance,
                 validate=lambda a, f: self.validate_decision(owner, a, f),
             )
+        except ContextEnvelopeExceeded:
+            raise
         except AdmissionError as exc:
             if is_quota_refusal(exc):
                 return self._pause_provider(owner, "director", index, exc)
             self.store.append(
                 owner,
                 "DIRECTOR_FAILURE",
-                {"index": index, "attempt": attempt, "reason": str(exc)[:1500]},
+                {
+                    "index": index,
+                    "attempt": attempt,
+                    "category": failure_category({"reason": str(exc)}),
+                    "reason": str(exc)[:1500],
+                },
             )
             return {"status": "DIRECTOR_RETRY", "reason": str(exc)[:300]}
         except JarvisError as exc:
@@ -1070,6 +1275,7 @@ class AutonomousResearch:
                 {
                     "index": index,
                     "attempt": attempt,
+                    "category": "provider_ended",
                     "reason": "provider ended without usage; settled at reservation: "
                     + str(exc)[:500],
                 },
@@ -1109,20 +1315,39 @@ class AutonomousResearch:
             return self._pause_provider(owner, "consultant", index, exc)
         self._complete(owner, index, decision, self.store.artifacts.put(result), {})
         if isinstance(action, StopAction):
+            return self._finish_stop(owner, index, decision)
+        return {"status": "ACTION_COMPLETED", "action": action.kind, "index": index}
+
+    def _finish_stop(self, owner: str, index: int, decision: AutonomyDecision) -> dict[str, Any]:
+        """Finalize a recorded stop idempotently, including recovery after completion."""
+        action = decision.action
+        assert isinstance(action, StopAction)
+        if isinstance(action, StopAction):
+            if action.scope == "checkpoint":
+                assert decision.planning_review is not None
+                question = decision.planning_review.owner_question
+                self.store.control(owner, "PAUSED")
+                return {"status": "PAUSED", "owner_question": question}
+            closed = {
+                (p["index"], p["branch_id"]) for p in payloads(self.store, owner, "BRANCH_CLOSED")
+            }
             for closure in action.closures:
+                if (index, closure.branch_id) in closed:
+                    continue
                 self.store.append(
                     owner, "BRANCH_CLOSED", {**closure.model_dump(mode="json"), "index": index}
                 )
             if action.scope == "session":
-                self.store.append(
-                    owner,
-                    "SESSION_STOPPED",
-                    {
-                        "index": index,
-                        "conclusion": action.conclusion,
-                        "finalist_result_ref": action.finalist_result_ref,
-                    },
-                )
+                if not payloads(self.store, owner, "SESSION_STOPPED"):
+                    self.store.append(
+                        owner,
+                        "SESSION_STOPPED",
+                        {
+                            "index": index,
+                            "conclusion": action.conclusion,
+                            "finalist_result_ref": action.finalist_result_ref,
+                        },
+                    )
                 self.store.set_status(owner, "CLOSED")
                 return {"status": "CLOSED", "conclusion": action.conclusion}
         return {"status": "ACTION_COMPLETED", "action": action.kind, "index": index}
@@ -1177,6 +1402,19 @@ class AutonomousResearch:
     # ------------------------------------------------------------------ background actions
     def _launch(self, owner: str, index: int, decision_ref: str) -> str:
         spec = self.spec(owner)
+        contract = contract_of(self.store, spec)
+        action = AutonomyDecision.model_validate(self.store.artifacts.get(decision_ref)).action
+        if contract.stages and isinstance(action, BacktestAction):
+            from jarvis.autonomy_report import session_outcome
+            from jarvis.autonomy_stages import admit_staged_backtest
+
+            freeze = admit_staged_backtest(
+                self.store, owner, contract, action, session_outcome(self.store, owner)
+            )
+            if freeze:
+                self.store.append(
+                    owner, "CONFIRMATION_CANDIDATE_FROZEN", {**freeze, "decision_index": index}
+                )
         child = self.store.create(
             {
                 "kind": "AutonomousAction",
@@ -1314,13 +1552,11 @@ class AutonomousResearch:
             files[scope.name + Path(scope.path).suffix] = data
         return files
 
-    def _analyze(
-        self, owner: str, child: str, index: int, action: AnalyzeAction
-    ) -> tuple[dict[str, Any], dict[str, list[str]]]:
-        spec = self.spec(owner)
-        contract = contract_of(self.store, spec)
+    def _evidence_inputs(
+        self, refs: tuple[str, ...]
+    ) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
         inputs, manifest = {}, []
-        for ref in action.input_refs:
+        for ref in refs:
             value = self.store.artifacts.get(ref)
             if value.get("kind") == "ObservedTable":
                 table = ObservedTable.model_validate(value)
@@ -1330,6 +1566,9 @@ class AutonomousResearch:
                     {
                         "path": "inputs/" + name,
                         "ref": ref,
+                        "artifact_ref": ref,
+                        "blob_ref": table.blob_ref,
+                        "identity_semantics": "artifact_ref/ref hash the canonical ObservedTable metadata; blob_ref hashes the delivered file bytes. Compare file SHA-256 only with blob_ref; cite the artifact ref as evidence.",
                         "columns": table.columns,
                         "rows": table.rows,
                         "description": table.description,
@@ -1346,6 +1585,14 @@ class AutonomousResearch:
                         "format": "json",
                     }
                 )
+        return inputs, manifest
+
+    def _analyze(
+        self, owner: str, child: str, index: int, action: AnalyzeAction
+    ) -> tuple[dict[str, Any], dict[str, list[str]]]:
+        spec = self.spec(owner)
+        contract = contract_of(self.store, spec)
+        inputs, manifest = self._evidence_inputs(action.input_refs)
         skill_files, skill_manifest = self._skill_files(spec)
         workspace = prepare_workspace(
             self.workdir(child) / "workspace",
@@ -1354,6 +1601,37 @@ class AutonomousResearch:
             base={},
             skills=skill_files,
         )
+
+        def verify_delivery(step: WorkerStep, finish_index: int) -> dict[str, Any]:
+            assert contract.analysis_delivery is not None
+            errors = []
+            if not step.final_script or not step.final_script.endswith(".py"):
+                errors.append(
+                    "Provide final_script: a Python script regenerating all output_files."
+                )
+            tables = [name for name in step.output_files if Path(name).suffix in {".csv", ".json"}]
+            if not step.output_files or (contract.analysis_delivery.require_tables and not tables):
+                errors.append("Provide at least one CSV/JSON evidence table in output_files.")
+            if errors:
+                return {"status": "INVALID_DELIVERY", "corrections": errors}
+            reproduction = self._rerun(
+                child, workspace, step.model_dump(mode="json"), attempt=finish_index
+            )
+            passed = (
+                reproduction.get("status") == "PASS" and reproduction.get("all_identical") is True
+            )
+            return {
+                "status": "OK"
+                if passed or not contract.analysis_delivery.require_reproduction
+                else "NONREPRODUCIBLE_OUTPUTS",
+                "reproducible": reproduction,
+                "corrections": []
+                if passed
+                else [
+                    "Fix final_script in this workspace so a clean rerun regenerates every declared output identically."
+                ],
+            }
+
         result = run_workspace_task(
             self.store,
             child,
@@ -1364,22 +1642,39 @@ class AutonomousResearch:
                 "rationale": action.rationale,
                 "expected_observation": action.expected_observation,
                 "inputs": manifest,
+                "source_manifest": [
+                    {
+                        "name": scope.name,
+                        "path": "sources/" + scope.name + Path(scope.path).suffix,
+                        "sha256": scope.sha256,
+                        "validation": "trusted harness checked declared bytes before workspace copy",
+                    }
+                    for scope in contract.source_scopes
+                ],
                 "metrics": [m.model_dump(mode="json") for m in contract.metrics],
                 "workspace_rules": "Scripts run with the workspace root as the current directory: read inputs/ and sources/, write only under work/. run_python accepts inline code in content (saved to path, default work/step_N.py) or runs an existing work/ script.",
                 "deliver": "Save the tables you rely on as CSV under work/, then finish with concrete numeric findings, output_files and final_script (the one script that regenerates them).",
+                **(
+                    {"delivery_contract": contract.analysis_delivery.model_dump(mode="json")}
+                    if contract.analysis_delivery
+                    else {}
+                ),
             },
             workspace=workspace,
             provider=self.provider(owner, "worker"),
             config=role_config(spec, "worker"),
             workbench=self.executors.workbench,
             max_steps=contract.grants.max_analysis_steps,
+            finish_validator=verify_delivery if contract.analysis_delivery else None,
         )
         register: dict[str, list[str]] = {"tables": []}
         outputs = {}
         reproducible = None
         if result["status"] == "FINISHED":
             work = workspace / "work"
-            if result["final_script"]:
+            if contract.analysis_delivery:
+                reproducible = result["finish_check"].get("reproducible")
+            elif result["final_script"]:
                 reproducible = self._rerun(child, workspace, result)
             for name in result["output_files"]:
                 path = work / name.removeprefix("work/")
@@ -1419,6 +1714,23 @@ class AutonomousResearch:
                 "steps": result["steps"],
                 "transcript_owner": child,
                 "evidence_level": "descriptive",
+                **(
+                    {
+                        "delivery_status": (
+                            "VERIFIED"
+                            if result["status"] == "FINISHED"
+                            and reproducible
+                            and reproducible.get("status") == "PASS"
+                            and reproducible.get("all_identical") is True
+                            else "UNVERIFIED"
+                            if result["status"] == "FINISHED"
+                            else "INVALID"
+                        ),
+                        "finish_check": result.get("finish_check"),
+                    }
+                    if contract.analysis_delivery
+                    else {}
+                ),
                 "skills_used": sorted(
                     {
                         s["name"]
@@ -1431,7 +1743,9 @@ class AutonomousResearch:
             register,
         )
 
-    def _rerun(self, child: str, workspace: Path, result: dict[str, Any]) -> dict[str, Any]:
+    def _rerun(
+        self, child: str, workspace: Path, result: dict[str, Any], *, attempt: int | None = None
+    ) -> dict[str, Any]:
         work = workspace / "work"
         fresh = workspace.parent / "rerun"
 
@@ -1460,12 +1774,32 @@ class AutonomousResearch:
                 same[name] = b.is_file() and file_digest(a) == file_digest(b)
             return {
                 "status": run["status"],
+                "origin": "trusted_harness",
+                "execution": {
+                    "clean_workspace": True,
+                    "fresh_process_started": run.get("exit_code") is not None,
+                    "exit_code": run.get("exit_code"),
+                    "script": script if script.startswith("work/") else "work/" + script,
+                    "workbench_id": digest(self.executors.workbench.identity()),
+                    "scope": "Regeneration of declared analysis outputs; separate from worker self-checks. No engine/backtest repetition or scientific-correctness claim.",
+                },
                 "outputs_identical": same,
                 "all_identical": bool(same) and all(same.values()),
             }
 
+        identity: dict[str, Any] = {"final_script": result["final_script"]}
+        if attempt is not None:
+            identity.update(
+                scripts={
+                    str(p.relative_to(work)): file_digest(p) for p in sorted(work.rglob("*.py"))
+                },
+                outputs={
+                    name: file_digest(work / name.removeprefix("work/"))
+                    for name in result["output_files"]
+                },
+            )
         outcome = local_job(
-            self.store, child, "rerun", {"final_script": result["final_script"]}, rerun
+            self.store, child, "rerun" if attempt is None else f"rerun:{attempt}", identity, rerun
         )
         return outcome["value"] or {"status": "ERROR", "error": outcome["error"]}
 
@@ -1500,6 +1834,27 @@ class AutonomousResearch:
                 ),
             )
             value = outcome["value"] or {"status": "FAILED", "error": outcome["error"]}
+            if (
+                contract.analysis_delivery
+                and contract.analysis_delivery.capture_submitted_source
+                and value.get("status") == "SUCCEEDED"
+            ):
+                from jarvis.autonomy_adapters import IrisRegionBacktester
+                from jarvis.autonomy_source import source_evidence
+
+                if isinstance(self.executors.backtester, IrisRegionBacktester):
+                    try:
+                        capture = source_evidence(
+                            self.executors.backtester,
+                            resolved,
+                            settings,
+                            experiment.period,
+                            workdir,
+                            value.get("provenance", {}),
+                        )
+                        value = {**value, "tables": [*value.get("tables", []), capture]}
+                    except IntegrityError as exc:
+                        value = {**value, "status": "INVALID_EVIDENCE", "error": str(exc)}
             tables = {}
             for table in value.get("tables", []):
                 ref = table_record(
@@ -1680,9 +2035,22 @@ class AutonomousResearch:
         base_files = validator.base_files(target, base)
         if set(base_files) != set(target.files):
             raise IntegrityError("validator base files differ from the declared target files")
+        state = self.state(owner)
+        context = self.store.artifacts.get(self._decision(state, index)["context_id"])
+        visible = set(context["visible_evidence_ids"])
+        allowed = self._analyzable(state) & visible
+        refs = [r for r in action.evidence_refs if r in allowed]
+        # Carry the cited analysis's actual registered tables, not just its prose summary.
+        # Never traverse an unregistered reference or expose future/hidden evidence.
+        for ref in tuple(refs):
+            value = self.store.artifacts.get(ref)
+            refs.extend(
+                r for r in value.get("output_tables", []) if r in state["tables"] and r in visible
+            )
+        inputs, input_manifest = self._evidence_inputs(tuple(dict.fromkeys(refs)))
         workspace = prepare_workspace(
             self.workdir(child) / "workspace",
-            inputs={},
+            inputs=inputs,
             sources=self._sources(contract),
             base=base_files,
         )
@@ -1698,6 +2066,7 @@ class AutonomousResearch:
                 "kind": "implementation",
                 "target": target.model_dump(mode="json"),
                 "requirement": action.requirement,
+                "inputs": input_manifest,
                 "rationale": action.rationale,
                 "editable_files": ["work/" + f for f in target.files],
                 "base_files": ["base/" + f for f in target.files],
@@ -1732,6 +2101,19 @@ class AutonomousResearch:
                     "kind": "ImplementationResult",
                     "status": "REJECTED",
                     "worker_status": result["status"],
+                    "rejection_reasons": [
+                        reason
+                        for reason, failed in (
+                            ("WORKER_NOT_FINISHED", result["status"] != "FINISHED"),
+                            ("VALIDATION_FAILED", validation.get("status") != "PASS"),
+                            ("NO_CHANGED_TARGET_FILES", not changed),
+                        )
+                        if failed
+                    ],
+                    "summary": result.get("summary"),
+                    "findings": result.get("findings", []),
+                    "finish_check": result.get("finish_check"),
+                    "input_refs": list(dict.fromkeys(refs)),
                     "validation": validation,
                     "changed_files": sorted(changed),
                     "diff": diff[:20000],
@@ -1778,6 +2160,7 @@ class AutonomousResearch:
                 "summary": result.get("summary"),
                 "patch_ref": patch_ref,
                 "candidate_ref": candidate_ref,
+                "input_refs": list(dict.fromkeys(refs)),
                 "validation": validation,
                 "changed_files": sorted(changed),
                 "diff": diff[:20000],
@@ -1828,6 +2211,16 @@ class AutonomousResearch:
             comparison = compare_results(
                 contract, row(action.baseline_result_ref), [row(r) for r in action.result_refs]
             )
+            if contract.stages:
+                period = comparison["period"]
+                comparison["research_stage"] = (
+                    "selection"
+                    if period == contract.stages.selection
+                    else "confirmation"
+                    if period in contract.stages.confirmation
+                    else "screening"
+                )
+                comparison["eligible_for_completion"] = period == contract.stages.selection
             del state
             return {
                 **comparison,
@@ -1882,7 +2275,7 @@ class AutonomousResearch:
         assert isinstance(action, StopAction)
         return {
             "kind": "Stop",
-            "status": "STOPPED",
+            "status": "CHECKPOINT" if action.scope == "checkpoint" else "STOPPED",
             "scope": action.scope,
             "conclusion": action.conclusion,
             "closures": [c.model_dump(mode="json") for c in action.closures],
@@ -1890,18 +2283,94 @@ class AutonomousResearch:
         }
 
     # ------------------------------------------------------------------ review
-    def _review(self, owner: str, state: dict[str, Any], index: int) -> dict[str, Any]:
-        attempt = sum(
-            1 for p in payloads(self.store, owner, "CRITIC_FAILURE") if p["index"] == index
+    def _carry_rejection(self, owner: str, prefix: str, context: dict[str, Any]) -> None:
+        rejected = [
+            p
+            for p in payloads(self.store, owner, "LAB_ROLE_REJECTED")
+            if p["key"].startswith(prefix)
+        ]
+        if rejected:
+            context["recovery_feedback"] = correction_context(self.store, rejected[-1])
+
+    def _role_failure_stop(
+        self, owner: str, role: str, index: int, failures: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        counts = {
+            kind: sum(failure_category(f) == kind for f in failures)
+            for kind in ("invalid_decision", "provider_ended")
+        }
+        controls = self.spec(owner).runtime
+        limits = {
+            "invalid_decision": MAX_CONSECUTIVE_FAILURES,
+            "provider_ended": controls.provider_retries + 1
+            if controls
+            else MAX_CONSECUTIVE_FAILURES,
+        }
+        exhausted = next((kind for kind in limits if counts[kind] >= limits[kind]), None)
+        if exhausted is None:
+            return None
+        code = (
+            "PROVIDER_RETRY_EXHAUSTED"
+            if exhausted == "provider_ended"
+            else "DECISION_REPAIR_EXHAUSTED"
         )
-        if attempt >= MAX_CONSECUTIVE_FAILURES:
-            self.store.set_status(owner, "NEEDS_ATTENTION")
-            return {"status": "NEEDS_ATTENTION", "reason": "repeated Critic failures"}
+        reason = f"{role}: {code}; provider timeouts and invalid proposals have separate finite allowances"
+        self.store.append(
+            owner,
+            "SESSION_PARTIAL_STOP",
+            {
+                "reason": reason,
+                "code": code,
+                "role": role,
+                "index": index,
+                "failure_counts": counts,
+                "failure_limits": limits,
+                "scientific_conclusion": "NOT_REACHED",
+            },
+        )
+        self.store.set_status(owner, "NEEDS_ATTENTION")
+        return {"status": "NEEDS_ATTENTION", "reason": reason, "code": code}
+
+    def _review(self, owner: str, state: dict[str, Any], index: int) -> dict[str, Any]:
+        failures = [p for p in payloads(self.store, owner, "CRITIC_FAILURE") if p["index"] == index]
+        attempt = len(failures)
+        stopped = self._role_failure_stop(owner, "critic", index, failures)
+        if stopped:
+            return stopped
         spec = self.spec(owner)
         contract = contract_of(self.store, spec)
         completed = state["completed"][index]
         shown = self._memory_shown(contract, state)
         hidden = set(shown["all"]) - set(shown["refs"])
+        evidence = None
+        if contract.analysis_delivery and contract.analysis_delivery.review_evidence:
+            from jarvis.autonomy_evidence import build_review_bundle
+
+            packed = state["review_evidence"].get(index)
+            if packed is None:
+                evidence = build_review_bundle(
+                    self.store,
+                    owner,
+                    index,
+                    completed["result_ref"],
+                    self._decision(state, index)["action"],
+                    state["visible"],
+                    state["launched"].get(index),
+                )
+                evidence_ref = self.store.artifacts.put(evidence)
+                self.store.append(
+                    owner,
+                    "REVIEW_EVIDENCE_PACKED",
+                    {
+                        "index": index,
+                        "result_ref": completed["result_ref"],
+                        "evidence_ref": evidence_ref,
+                    },
+                )
+                state = self.state(owner)
+            else:
+                evidence_ref = packed["evidence_ref"]
+                evidence = self.store.artifacts.get(evidence_ref)
         context = {
             "research_contract": {
                 k: v
@@ -1934,6 +2403,11 @@ class AutonomousResearch:
                 if i < index
             ][-8:],
             "visible_evidence_ids": [r for r in state["visible"] if r not in hidden],
+            **(
+                {"trusted_evidence_ref": evidence_ref, "trusted_evidence": evidence}
+                if evidence
+                else {}
+            ),
             **({"retry_attempt": attempt} if attempt else {}),
             **(
                 {"provider_retry": self._pauses(owner, "critic", index)}
@@ -1941,6 +2415,8 @@ class AutonomousResearch:
                 else {}
             ),
         }
+        if attempt:
+            self._carry_rejection(owner, f"review:{index}:", context)
 
         def check(value: Record, frozen: dict[str, Any]) -> None:
             assert isinstance(value, AutonomyReview)
@@ -1975,13 +2451,20 @@ class AutonomousResearch:
                 "",
                 validate=check,
             )
+        except ContextEnvelopeExceeded:
+            raise
         except AdmissionError as exc:
             if is_quota_refusal(exc):
                 return self._pause_provider(owner, "critic", index, exc)
             self.store.append(
                 owner,
                 "CRITIC_FAILURE",
-                {"index": index, "attempt": attempt, "reason": str(exc)[:1500]},
+                {
+                    "index": index,
+                    "attempt": attempt,
+                    "category": failure_category({"reason": str(exc)}),
+                    "reason": str(exc)[:1500],
+                },
             )
             return {"status": "CRITIC_RETRY"}
         except JarvisError as exc:
@@ -1993,6 +2476,7 @@ class AutonomousResearch:
                 {
                     "index": index,
                     "attempt": attempt,
+                    "category": "provider_ended",
                     "reason": "provider ended without usage; settled at reservation: "
                     + str(exc)[:500],
                 },
@@ -2014,6 +2498,32 @@ class AutonomousResearch:
         wall_seconds: float = 3600,
         on_step: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
+        from jarvis.runtime_delivery import export_exit
+
+        # One coordinator owns a complete run, including final delivery.
+        with self.store.campaign_lock(owner, scope="autonomy-run"):
+            try:
+                result = self._run_loop(
+                    owner, max_steps=max_steps, wall_seconds=wall_seconds, on_step=on_step
+                )
+            except Exception as exc:
+                result = {
+                    "status": "INFRASTRUCTURE_INTERRUPTED",
+                    "error": type(exc).__name__ + ": " + str(exc)[:1000],
+                }
+            try:
+                return {**result, "delivery": export_exit(self.store, owner, result)}
+            except Exception as exc:
+                return {**result, "delivery_error": type(exc).__name__ + ": " + str(exc)[:1000]}
+
+    def _run_loop(
+        self,
+        owner: str,
+        *,
+        max_steps: int = 10000,
+        wall_seconds: float = 3600,
+        on_step: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         import time
 
         started = time.monotonic()
@@ -2024,7 +2534,13 @@ class AutonomousResearch:
             try:
                 result = self.advance(owner)
             except JarvisError as exc:
-                return {"status": self.store.status(owner), "error": str(exc)[:500]}
+                status = self.store.status(owner)
+                return {
+                    "status": status
+                    if status in {"NEEDS_RECONCILIATION", "BUDGET_EXHAUSTED", "NEEDS_ATTENTION"}
+                    else "NEEDS_ATTENTION",
+                    "error": str(exc)[:500],
+                }
             if on_step:
                 on_step(result)
             if result["status"] in {
@@ -2036,15 +2552,49 @@ class AutonomousResearch:
                 "CANCELLED",
                 "PROVIDER_UNAVAILABLE",
             }:
+                controls = self.spec(owner).runtime
+                retries = payloads(self.store, owner, "RUNTIME_PROVIDER_RETRY")
+                if (
+                    result["status"] == "PROVIDER_UNAVAILABLE"
+                    and controls
+                    and len(retries) < controls.provider_retries
+                    and self.store.get_control(owner) not in {"PAUSED", "CANCELLED"}
+                ):
+                    delay = controls.provider_backoff_seconds * (len(retries) + 1)
+                    self.store.append(
+                        owner,
+                        "RUNTIME_PROVIDER_RETRY",
+                        {
+                            "attempt": len(retries) + 1,
+                            "backoff_seconds": delay,
+                            "reason": "provider refusal; no work or budget is recreated",
+                        },
+                    )
+                    # Poll the owner's stop signal while backing off, bounded to 60s.
+                    end = min(started + wall_seconds, time.monotonic() + delay)
+                    while time.monotonic() < end:
+                        if self.store.get_control(owner) in {"PAUSED", "CANCELLED"}:
+                            break
+                        time.sleep(min(0.25, max(0, end - time.monotonic())))
+                    continue
                 if result["status"] in {"CLOSED", "BUDGET_EXHAUSTED"}:
-                    self._drain(owner)
-                if self.consolidate and result["status"] in {
-                    "CLOSED",
-                    "BUDGET_EXHAUSTED",
-                    "NEEDS_ATTENTION",
-                    "PAUSED",
-                    "CANCELLED",
-                }:
+                    self._drain(
+                        owner, timeout=min(30, max(0, wall_seconds - (time.monotonic() - started)))
+                    )
+                if (
+                    self.consolidate
+                    and result["status"]
+                    in {
+                        "CLOSED",
+                        "BUDGET_EXHAUSTED",
+                        "NEEDS_ATTENTION",
+                        "PAUSED",
+                        "CANCELLED",
+                    }
+                    and not (
+                        result["status"] == "PAUSED" and self.state(owner).get("owner_checkpoint")
+                    )
+                ):
                     result = {**result, "memory": self.remember(owner)}
                 return result
             if result["status"] == "WAITING":
@@ -2062,6 +2612,14 @@ class AutonomousResearch:
                 "curator", {**default_role_config(), **spec.role_config}["critic"]
             )
         )
+        if spec.runtime:
+            config = config.model_copy(
+                update={
+                    "max_context_bytes": spec.runtime.max_context_bytes,
+                    "max_prompt_bytes": spec.runtime.max_prompt_bytes,
+                    "provider_retries": spec.runtime.provider_retries,
+                }
+            )
         try:
             value = KnowledgeBase(self.store).consolidate(
                 owner, provider_factory=self.provider_factory, config=config
@@ -2071,10 +2629,10 @@ class AutonomousResearch:
             value = {**value, "curator_error": str(exc)[:300]}
         return {k: (len(v) if isinstance(v, list) else v) for k, v in value.items()}
 
-    def _drain(self, owner: str) -> None:
+    def _drain(self, owner: str, *, timeout: float = 30) -> None:
         state = self.state(owner)
         children = [state["launched"][i] for i in state["running"]]
-        self.runner.wait_any(children, timeout=3600)
+        self.runner.wait_any(children, timeout=timeout)
         state = self.state(owner)
         while state["running"]:
             if not self._collect(owner, state):

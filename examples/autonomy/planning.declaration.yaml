@@ -1,0 +1,14 @@
+# Deterministic toy acceptance: scripted roles and synthetic scores, zero external calls.
+adapter: jarvis.planning_fixture:declared_world
+agent: planning-fixture
+memory: false
+research_planning: {}
+max_decisions: 12
+max_concurrent_actions: 1
+budget:
+  max_actions: 40
+  max_tool_calls: 40
+  max_llm_tokens: 500000  # accommodates the standard per-call reservation; usage here is simulated
+  max_wall_seconds: 1800  # accommodates the standard 900-second call reservation
+  max_compute_units: 40
+  max_parallel_jobs: 2

@@ -176,6 +176,11 @@ class CodexProvider:
             usage = totals or None
         if timed_out or process.returncode or not terminal or parse_error:
             error = "PROVIDER_TIMEOUT" if timed_out else "PROVIDER_INCOMPLETE"
+            if not timed_out and any(
+                e.get("type") in {"error", "turn.failed"} and "max_output_tokens" in json.dumps(e)
+                for e in events
+            ):
+                error += ":OUTPUT_LIMIT"
             # A partial stream may omit a later paid turn. Retain the reservation
             # rather than treating a known lower bound as the complete charge.
             usage = None
