@@ -49,20 +49,30 @@ def assess_profile(
         )
     risks: list[dict[str, Any]] = []
     for limit in profile.risk_limits:
-        if not _measured(candidate, limit.metric) or not _measured(baseline, limit.metric):
+        needs_baseline = limit.max_worsening is not None
+        if not _measured(candidate, limit.metric) or (
+            needs_baseline and not _measured(baseline, limit.metric)
+        ):
             risks.append({"metric": limit.metric, "status": "MISSING"})
             continue
-        worsening = -_gain(
-            specs[limit.metric], candidate[limit.metric], baseline[limit.metric], limit.relative
-        )
-        risks.append(
-            {
-                "metric": limit.metric,
-                "worsening": worsening,
-                "limit": limit.max_worsening,
-                "status": "BREACHED" if worsening > limit.max_worsening + 1e-12 else "WITHIN",
-            }
-        )
+        row: dict[str, Any] = {"metric": limit.metric}
+        breached = False
+        if limit.max_worsening is not None:
+            worsening = -_gain(
+                specs[limit.metric], candidate[limit.metric], baseline[limit.metric], limit.relative
+            )
+            row.update(worsening=worsening, limit=limit.max_worsening)
+            breached = worsening > limit.max_worsening + 1e-12
+        if limit.floor is not None:
+            value = candidate[limit.metric]
+            below = (
+                value < limit.floor
+                if specs[limit.metric].direction == "maximize"
+                else value > limit.floor
+            )
+            row["floor"] = limit.floor
+            breached = breached or below
+        risks.append({**row, "status": "BREACHED" if breached else "WITHIN"})
     count_ok = True
     if _measured(baseline, "count") and baseline["count"] > 0:
         count_ok = _measured(candidate, "count")

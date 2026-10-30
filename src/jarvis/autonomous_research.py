@@ -10,6 +10,7 @@ Long actions (ANALYZE, BACKTEST, TRAIN_MODEL, IMPLEMENT) run in child campaigns 
 background threads so the Director can keep working while they run.
 """
 
+import dataclasses
 import functools
 import json
 import shutil
@@ -971,6 +972,11 @@ class AutonomousResearch:
                 raise ValueError("training run grant exhausted")
             if action.base_candidate_ref not in state["candidates"]:
                 raise ValueError("unknown base candidate")
+            specs = {s.name: s for s in contract.settings}
+            for name, value in setting_dict(action.settings).items():
+                if name not in specs:
+                    raise ValueError(f"undeclared setting {name}")
+                specs[name].check(value)
             if action.training_data_ref and action.training_data_ref not in state["tables"]:
                 raise ValueError("training data must be a registered observed table")
             if action.pipeline_patch_ref and (
@@ -1954,6 +1960,13 @@ class AutonomousResearch:
         base = resolve_candidate(
             self.store, action.base_candidate_ref, self.workdir(child) / "candidates"
         )
+        settings = {**base.settings, **setting_dict(action.settings)}
+        if action.settings:
+            base = dataclasses.replace(
+                base,
+                candidate=base.candidate.model_copy(update={"settings": settings}),
+                settings=settings,
+            )
         data_path = None
         if action.training_data_ref:
             table = ObservedTable.model_validate(self.store.artifacts.get(action.training_data_ref))
@@ -1977,6 +1990,8 @@ class AutonomousResearch:
                 "config": config,
                 "data": action.training_data_ref,
                 "patch": action.pipeline_patch_ref,
+                # Only keyed when given, so earlier training jobs keep their keys.
+                **({"settings": settings} if action.settings else {}),
             },
             lambda: self.executors.trainer.run(  # type: ignore[union-attr]
                 base, config, data_path, patch_path, self.workdir(child) / "train"
@@ -2021,7 +2036,7 @@ class AutonomousResearch:
             parent_ref=action.base_candidate_ref,
             model_ref=model_ref,
             patch_refs=base.candidate.patch_refs,
-            settings=base.candidate.settings,
+            settings=settings,
             origin="agent_trained",
             data_policy=data_policy[:600],
             produced_by={"action_index": index, "kind": "TRAIN_MODEL"},

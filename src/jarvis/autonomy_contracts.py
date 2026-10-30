@@ -85,9 +85,22 @@ class Objective(Record):
 
 
 class RiskLimit(Record):
+    """Bounds a metric against the matched baseline (max_worsening) and/or absolutely (floor).
+
+    A floor is the worst admissible candidate value: a minimum for metrics to maximize, a
+    maximum for metrics to minimize.
+    """
+
     metric: Name
-    max_worsening: float = Field(ge=0)
+    max_worsening: float | None = Field(default=None, ge=0)
     relative: bool = True
+    floor: float | None = None
+
+    @model_validator(mode="after")
+    def bounded(self) -> "RiskLimit":
+        if self.max_worsening is None and self.floor is None:
+            raise ValueError("a risk limit needs max_worsening or floor")
+        return self
 
 
 class AcceptanceProfile(Record):
@@ -296,6 +309,9 @@ class TrainModelAction(ActionBase):
     training_data_ref: Ref | None = None
     pipeline_patch_ref: Ref | None = None
     config: tuple[SettingValue, ...] = Field(default=(), max_length=24)
+    # Declared strategy settings the trained candidate runs with (e.g. the collection's rule
+    # switches); the trainer sees the base under them and the new candidate keeps them.
+    settings: tuple[SettingValue, ...] = Field(default=(), max_length=12)
 
 
 class ImplementAction(ActionBase):

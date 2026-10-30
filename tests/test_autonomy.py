@@ -14,6 +14,8 @@ from jarvis.autonomy_contracts import (
     MetricSpec,
     Objective,
     SettingSpec,
+    SettingValue,
+    TrainModelAction,
 )
 from jarvis.autonomy_jobs import ActionRunner, local_job
 from jarvis.autonomy_policy import ResearchPolicy, enforce
@@ -287,6 +289,57 @@ def test_multi_objective_profiles_pareto_and_declared_finalist():
         compare_results(contract, rows[0], [{**rows[1], "period": "other"}])
 
 
+def test_risk_limit_floor_is_absolute():
+    contract = AutonomyContract.model_validate(
+        {
+            **_minimal_contract(),
+            "metrics": [
+                {"name": "pl", "direction": "maximize", "description": "d"},
+                {"name": "mean_pr", "direction": "maximize", "description": "d"},
+                {"name": "mdd", "direction": "minimize", "description": "d"},
+            ],
+            "acceptance_profiles": [
+                {
+                    "name": "pl_first",
+                    "objectives": [{"metric": "pl"}],
+                    "risk_limits": [
+                        {"metric": "mean_pr", "floor": 0.001},
+                        {"metric": "mdd", "floor": 30.0},
+                    ],
+                    "description": "d",
+                }
+            ],
+        }
+    )
+    profile = contract.acceptance_profiles[0]
+    base = {"pl": 100.0, "mean_pr": 0.0025, "mdd": 10.0}
+    # PR far below baseline but above the floor, and a doubled MDD under its cap, still pass.
+    assert (
+        assess_profile(contract, profile, {"pl": 150.0, "mean_pr": 0.0011, "mdd": 20.0}, base)[
+            "verdict"
+        ]
+        == "PASS"
+    )
+    low = assess_profile(contract, profile, {"pl": 150.0, "mean_pr": 0.0009, "mdd": 20.0}, base)
+    assert low["verdict"] == "FAIL" and low["risk_limits"][0]["status"] == "BREACHED"
+    deep = assess_profile(contract, profile, {"pl": 150.0, "mean_pr": 0.002, "mdd": 31.0}, base)
+    assert deep["risk_limits"][1]["status"] == "BREACHED"
+    with pytest.raises(ValueError, match="max_worsening or floor"):
+        AutonomyContract.model_validate(
+            {
+                **_minimal_contract(),
+                "acceptance_profiles": [
+                    {
+                        "name": "p",
+                        "objectives": [{"metric": "pl"}],
+                        "risk_limits": [{"metric": "pl"}],
+                        "description": "d",
+                    }
+                ],
+            }
+        )
+
+
 # ---------------------------------------------------------------- jobs and workbench
 
 
@@ -512,6 +565,24 @@ def test_decision_validation_rejects_repeats_and_out_of_contract_actions(tmp_pat
             "not declared",
         ),
         ({"kind": "READ_SOURCE", "scopes": ["secret"]}, "unknown source scope"),
+        (
+            {
+                "kind": "TRAIN_MODEL",
+                "label": "x",
+                "base_candidate_ref": baseline,
+                "settings": [{"name": "unknown", "value": 1.0}],
+            },
+            "undeclared setting",
+        ),
+        (
+            {
+                "kind": "TRAIN_MODEL",
+                "label": "x",
+                "base_candidate_ref": baseline,
+                "settings": [{"name": "heuristic_cancel_bps", "value": 999.0}],
+            },
+            "outside declared space",
+        ),
     ]:
         with pytest.raises(ValueError, match=message):
             engine.validate_decision(owner, decision(action), context)
@@ -895,3 +966,46 @@ def test_invalid_finish_goes_back_to_the_worker(tmp_path):
     assert analyses and all(a["status"] == "OBSERVED" for a in analyses)
     ledger = engine.director_context(owner, engine.state(owner))["experiment_ledger"]
     assert ledger and all("result_origin" in row["provenance"] for row in ledger)
+
+
+def test_training_settings_reach_the_trainer_and_the_trained_candidate(tmp_path):
+    workbench_or_skip(tmp_path)
+    store, engine, owner, world = session(tmp_path)
+    engine.run(owner, wall_seconds=600)
+    baseline = store.artifacts.get(world["contract_ref"])["baseline_candidate_ref"]
+    seen = []
+    trainer = engine.executors.trainer
+    run = trainer.run
+
+    def spy(base, *args):
+        seen.append(dict(base.settings))
+        return run(base, *args)
+
+    trainer.run = spy
+    action = TrainModelAction(
+        label="bound",
+        base_candidate_ref=baseline,
+        settings=(SettingValue(name="heuristic_cancel_bps", value=55.0),),
+        rationale="r",
+        expected_observation="e",
+        branch_id="b",
+        question_id="q",
+        hypothesis_ids=("h",),
+        evidence_refs=(),
+    )
+    child = store.create(
+        {
+            "kind": "AutonomousAction",
+            "parent": owner,
+            "index": 99,
+            "decision_ref": baseline,
+            "world_id": "sha256:" + "3" * 64,
+            "task": {"budget": engine.spec(owner).budget.model_dump()},
+            "budget_owner": owner,
+        }
+    )
+    value, register = engine._train(owner, child, 99, action)
+    assert value["status"] == "SUCCEEDED"
+    assert seen[0]["heuristic_cancel_bps"] == 55.0
+    candidate = store.artifacts.get(register["candidates"][0])
+    assert candidate["settings"]["heuristic_cancel_bps"] == 55.0
