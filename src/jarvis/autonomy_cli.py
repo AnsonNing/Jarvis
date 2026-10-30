@@ -368,7 +368,18 @@ def brief(store: Store, domain: str | None = None) -> dict[str, Any]:
                 "(only if no other process is running it)"
             )
         elif state == "NEEDS_ATTENTION":
-            next_steps.append(f"{cid}: needs attention; read `autonomy status {cid}` last_issue")
+            last_stop = [
+                e["payload"] for e in store.events(cid) if e["event_type"] == "SESSION_PARTIAL_STOP"
+            ]
+            if last_stop and last_stop[-1].get("recoverable"):
+                next_steps.append(
+                    f"{cid}: stopped after repeated {last_stop[-1].get('role')} failures; "
+                    f"`autonomy resume {cid}` then `autonomy run {cid}` continues the same session"
+                )
+            else:
+                next_steps.append(
+                    f"{cid}: needs attention; read `autonomy status {cid}` last_issue"
+                )
     kb = KnowledgeBase(store)
     memory = {}
     for name in sorted(domains | ({domain} if domain else set())):
@@ -702,8 +713,20 @@ def run(store: Store, args: argparse.Namespace) -> dict[str, Any]:
             "note": "Visible to the next Director decision, which must respond.",
         }
     if op in {"pause", "resume", "cancel"}:
+        recovered = None
+        if op == "resume" and store.status(owner) == "NEEDS_ATTENTION":
+            from jarvis.autonomous_research import AutonomousResearch
+
+            engine = AutonomousResearch.__new__(AutonomousResearch)
+            engine.store = store
+            recovered = engine.recover(owner)["recovered"]
         store.control(owner, {"pause": "PAUSED", "resume": "RUNNING", "cancel": "CANCELLED"}[op])
-        return {"owner": owner, "control": store.get_control(owner)}
+        return {
+            "owner": owner,
+            "control": store.get_control(owner),
+            "status": store.status(owner),
+            **({"recovered": recovered, "note": "Run it again to continue."} if recovered else {}),
+        }
     if op == "status":
         return status(store, owner)
     if op == "report":

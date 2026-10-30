@@ -318,3 +318,93 @@ def test_single_cli_run_executes_native_recovers_validates_and_delivers(tmp_path
     # Running a closed session again adopts existing evidence; no native rerun/provider call.
     assert call("run", o)["status"] == "CLOSED"
     assert jobs_before == {m: len(s.jobs(m)) for m in [o, *launches]}
+
+
+def test_large_memory_is_reduced_to_owner_intent_before_refusing(tmp_path):
+    """Recorded failure: owner guidance + preference lessons + skills pushed a fixed
+    contract and plan over the envelope after one decision."""
+    s = Store(tmp_path)
+    context = {
+        "research_contract": {"instruction": "fixed owner mandate " * 2500},
+        "research_plan": {"branches": ["b"] * 1000},
+        "research_memory": {
+            "owner_guidance": [{"text": f"guidance {i} " + "g" * 4000} for i in range(9)],
+            "lessons": [
+                {"kind": "owner_preference", "statement": f"pref {i} " + "p" * 3000}
+                for i in range(9)
+            ],
+            "skills": [{"name": f"skill{i}", "description": "d" * 3000} for i in range(6)],
+            "open_questions": ["q" * 2000] * 5,
+        },
+        "visible_evidence_ids": [],
+    }
+    assert encoded_size(context) > 120000
+    result = bounded_context(s, context, 80000)
+    assert encoded_size(result) <= 80000
+    assert result["research_contract"] == context["research_contract"]
+    assert result["research_plan"] == context["research_plan"]
+    memory = result["research_memory"]
+    assert len(memory["owner_guidance"]) == 8 and memory["owner_guidance"][-1].startswith(
+        "guidance 8"
+    )
+    assert memory["owner_preferences"][-1].startswith("pref 8")
+    assert memory["skills"] == [f"skill{i}" for i in range(6)]
+    assert s.artifacts.get(memory["view_ref"]) == context
+
+
+def test_context_cap_leaves_room_for_schema_and_reservation(tmp_path):
+    from jarvis.autonomous_research import role_config
+
+    s = Store(tmp_path)
+    world = declared_world(s, {})
+    small = AutonomySessionSpec(contract_ref=world["contract_ref"], runtime=RuntimeControls())
+    assert role_config(small, "director").max_context_bytes == 80000  # 120000 reservation
+    large = AutonomySessionSpec(
+        contract_ref=world["contract_ref"],
+        runtime=RuntimeControls(),
+        role_config={"director": {**AgentConfig().model_dump(), "reserve_tokens": 200000}},
+    )
+    assert role_config(large, "director").max_context_bytes == 120000
+
+
+def test_cli_resume_continues_a_recoverable_stop_only(tmp_path):
+    import contextlib
+    import io
+
+    from jarvis.cli import parser, run
+    from jarvis.contracts import AdmissionError
+
+    s = Store(tmp_path / "store")
+    world = declared_world(s, {})
+    e = AutonomousResearch(s, world["executors"], lambda cfg, r: PlanningFixtureProvider(r))
+    o = e.create(AutonomySessionSpec(contract_ref=world["contract_ref"]))
+
+    def call(*args):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            run(parser().parse_args(["--store", str(tmp_path / "store"), "autonomy", *args]))
+        return json.loads(buffer.getvalue())
+
+    s.append(o, "SESSION_PARTIAL_STOP", {"reason": "CONTEXT_ENVELOPE: x"})
+    s.set_status(o, "NEEDS_ATTENTION")
+    with pytest.raises(AdmissionError, match="only a recoverable role stop"):
+        call("resume", o)
+    s.append(
+        o,
+        "SESSION_PARTIAL_STOP",
+        {
+            "reason": "director: DECISION_REPAIR_EXHAUSTED",
+            "code": "DECISION_REPAIR_EXHAUSTED",
+            "role": "director",
+            "index": 0,
+            "failure_counts": {},
+            "recoverable": True,
+        },
+    )
+    resumed = call("resume", o)
+    assert resumed["status"] == "RUNNING" and resumed["recovered"] == {
+        "role": "director",
+        "index": 0,
+    }
+    recovery = [x["payload"] for x in s.events(o) if x["event_type"] == "ROLE_RECOVERY"][-1]
+    assert recovery["mode"] == "manual"

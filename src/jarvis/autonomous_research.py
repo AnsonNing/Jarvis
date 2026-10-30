@@ -13,6 +13,7 @@ background threads so the Director can keep working while they run.
 import functools
 import json
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,9 @@ ASYNC_KINDS = {"ANALYZE", "BACKTEST", "TRAIN_MODEL", "IMPLEMENT"}
 REVIEWED_KINDS = {"ANALYZE", "BACKTEST", "TRAIN_MODEL", "IMPLEMENT", "COMPARE"}
 ROLES = ("director", "critic", "worker", "consultant")
 MAX_CONSECUTIVE_FAILURES = 3
+# After a role exhausts its allowance on one decision, the same run retries with a fresh
+# allowance this many times (with the earlier rejections shown) before a resumable stop.
+AUTO_RECOVERY_ROUNDS = 2
 SOURCE_LIMIT = 60000
 
 
@@ -142,9 +146,21 @@ def role_config(spec: AutonomySessionSpec, role: str) -> AgentConfig:
     merged = {**default_role_config(), **spec.role_config}
     config = AgentConfig.model_validate(merged[role])
     if spec.runtime:
+        # The compaction target leaves room for the schema (visible-ID enums) and role prompt
+        # inside both the prompt cap and the token reservation, so preflight cannot refuse a
+        # context that compaction already accepted.
+        headroom = 40000
+        context_cap = max(
+            8000,
+            min(
+                spec.runtime.max_context_bytes,
+                spec.runtime.max_prompt_bytes - headroom,
+                config.reserve_tokens - headroom,
+            ),
+        )
         config = config.model_copy(
             update={
-                "max_context_bytes": spec.runtime.max_context_bytes,
+                "max_context_bytes": context_cap,
                 "max_prompt_bytes": spec.runtime.max_prompt_bytes,
                 "provider_retries": spec.runtime.provider_retries,
             }
@@ -1233,6 +1249,9 @@ class AutonomousResearch:
         if attempt:
             context["retry_attempt"] = attempt  # a retry is a distinct, separately receipted call
             self._carry_rejection(owner, f"decision:{index}:", context)
+            recovery = self._recovery_view(owner, "director", index, f"decision:{index}:")
+            if recovery:
+                context["recovery_round"] = recovery
         pauses = self._pauses(owner, "director", index)
         if pauses:
             context["provider_retry"] = pauses
@@ -2292,11 +2311,22 @@ class AutonomousResearch:
         if rejected:
             context["recovery_feedback"] = correction_context(self.store, rejected[-1])
 
+    def _recoveries(self, owner: str, role: str, index: int) -> list[dict[str, Any]]:
+        return [
+            p
+            for p in payloads(self.store, owner, "ROLE_RECOVERY")
+            if p["role"] == role and p["index"] == index
+        ]
+
     def _role_failure_stop(
         self, owner: str, role: str, index: int, failures: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
+        """Finite allowances per recovery round; exhaustion first recovers in-run, then
+        stops resumably. Only failures since the latest recovery count against a round."""
+        recoveries = self._recoveries(owner, role, index)
+        active = failures[recoveries[-1]["failures_before"] :] if recoveries else failures
         counts = {
-            kind: sum(failure_category(f) == kind for f in failures)
+            kind: sum(failure_category(f) == kind for f in active)
             for kind in ("invalid_decision", "provider_ended")
         }
         controls = self.spec(owner).runtime
@@ -2314,7 +2344,30 @@ class AutonomousResearch:
             if exhausted == "provider_ended"
             else "DECISION_REPAIR_EXHAUSTED"
         )
-        reason = f"{role}: {code}; provider timeouts and invalid proposals have separate finite allowances"
+        manual = max((i for i, r in enumerate(recoveries) if r["mode"] == "manual"), default=-1)
+        automatic = sum(r["mode"] == "automatic" for r in recoveries[manual + 1 :])
+        if automatic < AUTO_RECOVERY_ROUNDS:
+            if exhausted == "provider_ended":
+                backoff = controls.provider_backoff_seconds if controls else 1.0
+                time.sleep(min(120.0, backoff * 4 ** (automatic + 1)))
+            self.store.append(
+                owner,
+                "ROLE_RECOVERY",
+                {
+                    "role": role,
+                    "index": index,
+                    "mode": "automatic",
+                    "round": automatic + 1,
+                    "code": code,
+                    "failures_before": len(failures),
+                    "failure_counts": counts,
+                },
+            )
+            return None
+        reason = (
+            f"{role}: {code}; provider timeouts and invalid proposals have separate finite "
+            f"allowances; {AUTO_RECOVERY_ROUNDS} automatic recovery rounds also failed"
+        )
         self.store.append(
             owner,
             "SESSION_PARTIAL_STOP",
@@ -2325,11 +2378,67 @@ class AutonomousResearch:
                 "index": index,
                 "failure_counts": counts,
                 "failure_limits": limits,
+                "recoverable": True,
+                "resume": f"autonomy resume {owner}, then autonomy run {owner}",
                 "scientific_conclusion": "NOT_REACHED",
             },
         )
         self.store.set_status(owner, "NEEDS_ATTENTION")
-        return {"status": "NEEDS_ATTENTION", "reason": reason, "code": code}
+        return {"status": "NEEDS_ATTENTION", "reason": reason, "code": code, "recoverable": True}
+
+    def recover(self, owner: str) -> dict[str, Any]:
+        """Owner resume of a recoverable role stop: same session, fresh allowance rounds."""
+        stops = payloads(self.store, owner, "SESSION_PARTIAL_STOP")
+        last = stops[-1] if stops else {}
+        if self.store.status(owner) != "NEEDS_ATTENTION" or not last.get("recoverable"):
+            raise AdmissionError(
+                "only a recoverable role stop can be resumed in place; diagnose this stop: "
+                + str(last.get("reason") or self.store.status(owner))[:300]
+            )
+        role, index = last["role"], last["index"]
+        if role == "director":
+            failures = [f for f in self.state(owner)["failures"] if f["index"] == index]
+        else:
+            failures = [
+                p
+                for p in payloads(self.store, owner, f"{role.upper()}_FAILURE")
+                if p["index"] == index
+            ]
+        self.store.append(
+            owner,
+            "ROLE_RECOVERY",
+            {
+                "role": role,
+                "index": index,
+                "mode": "manual",
+                "round": 0,
+                "code": last["code"],
+                "failures_before": len(failures),
+                "failure_counts": last.get("failure_counts", {}),
+            },
+        )
+        self.store.set_status(owner, "RUNNING")
+        return {"owner": owner, "status": "RUNNING", "recovered": {"role": role, "index": index}}
+
+    def _recovery_view(
+        self, owner: str, role: str, index: int, prefix: str
+    ) -> dict[str, Any] | None:
+        recoveries = self._recoveries(owner, role, index)
+        if not recoveries:
+            return None
+        rejected = [
+            str(p["reason"])[:400]
+            for p in payloads(self.store, owner, "LAB_ROLE_REJECTED")
+            if p["key"].startswith(prefix)
+        ]
+        return {
+            "round": len(recoveries),
+            "earlier_rejections": rejected[-6:],
+            "instruction": "Earlier attempts at this step were rejected repeatedly. Do not repeat a "
+            "rejected form. Prefer a simpler valid next step that uses only IDs listed in this "
+            "context (for example address existing hypotheses with question=null, cite visible "
+            "results, or choose a different action) over re-submitting the same proposal.",
+        }
 
     def _review(self, owner: str, state: dict[str, Any], index: int) -> dict[str, Any]:
         failures = [p for p in payloads(self.store, owner, "CRITIC_FAILURE") if p["index"] == index]
@@ -2417,6 +2526,9 @@ class AutonomousResearch:
         }
         if attempt:
             self._carry_rejection(owner, f"review:{index}:", context)
+            recovery = self._recovery_view(owner, "critic", index, f"review:{index}:")
+            if recovery:
+                context["recovery_round"] = recovery
 
         def check(value: Record, frozen: dict[str, Any]) -> None:
             assert isinstance(value, AutonomyReview)

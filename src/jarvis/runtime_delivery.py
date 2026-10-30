@@ -70,8 +70,13 @@ def export_exit(store: Store, owner: str, exit_result: dict[str, Any]) -> dict[s
         if job["status"] == "SETTLED_AT_RESERVATION" and job["actual"]
     ]
     stops = [e["payload"] for e in events if e["event_type"] == "SESSION_PARTIAL_STOP"]
+    recoverable = exit_result.get("status") == "NEEDS_ATTENTION" and bool(
+        stops and stops[-1].get("recoverable")
+    )
     resume = (
-        "This exit requires diagnosis/configuration review before resumption; resume only changes owner control and cannot clear a terminal status or change the pinned source. No budget or session is automatically recreated."
+        "Recoverable role stop: `autonomy resume` grants fresh retry rounds in this same session, then `autonomy run` continues; the pinned source and budget are unchanged."
+        if recoverable
+        else "This exit requires diagnosis/configuration review before resumption; resume only changes owner control and cannot clear a terminal status or change the pinned source. No budget or session is automatically recreated."
         if exit_result.get("status")
         in {"NEEDS_ATTENTION", "BUDGET_EXHAUSTED", "INFRASTRUCTURE_INTERRUPTED"}
         else "Same session and immutable source; adopt existing receipts. Unknown pending jobs require reconciliation. Owner pause/checkpoint requires owner resume. No new budget or successor session is created."

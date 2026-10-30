@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.autonomous_research import AutonomousResearch
+from jarvis.autonomous_research import AUTO_RECOVERY_ROUNDS, AutonomousResearch
 from jarvis.autonomy_contracts import AutonomyContract, AutonomyDecision, AutonomySessionSpec
 from jarvis.autonomy_report import replay_session, verify_session
 from jarvis.contracts import Budget
@@ -70,7 +70,7 @@ def test_persistent_role_fault_stops_once_and_delivers_truthfully(tmp_path, faul
         AutonomySessionSpec(
             contract_ref=world["contract_ref"],
             runtime=RuntimeControls(provider_backoff_seconds=0),
-            budget=Budget(max_llm_tokens=2000000, max_wall_seconds=20000),
+            budget=Budget(max_llm_tokens=4000000, max_wall_seconds=60000),
         )
     )
     result = e.run(o, wall_seconds=20)
@@ -95,14 +95,23 @@ def test_persistent_role_fault_stops_once_and_delivers_truthfully(tmp_path, faul
             stop["failure_counts"]["provider_ended" if fault == "invalid" else "invalid_decision"]
             == 0
         )
-        assert "cannot clear a terminal status" in exit_view["resume_point"]
+        # The run first recovered in place, then stopped resumably.
+        assert stop["recoverable"] is True
+        assert "Recoverable role stop" in exit_view["resume_point"]
+        rounds = [x["payload"] for x in s.events(o) if x["event_type"] == "ROLE_RECOVERY"]
+        assert [r["mode"] for r in rounds] == ["automatic"] * AUTO_RECOVERY_ROUNDS
         # Identical rejected corrections may adopt a receipt rather than pay again.
-        assert 3 <= provider.calls <= 9
+        assert 3 <= provider.calls <= 9 * (1 + AUTO_RECOVERY_ROUNDS)
         if fault == "ended_timeout":
-            assert provider.calls == 3
+            assert provider.calls == 3 * (1 + AUTO_RECOVERY_ROUNDS)
     calls, jobs = provider.calls, len(s.jobs(o))
+    # A stopped session does not spend again until the owner resumes it.
     assert e.run(o)["status"] == expected
     assert provider.calls == calls and len(s.jobs(o)) == jobs
+    if fault != "unknown":
+        assert e.recover(o)["status"] == "RUNNING"
+        assert e.run(o, wall_seconds=20)["status"] == expected
+        assert provider.calls > calls
 
 
 class FaultedRuntimeProvider(RuntimeFixtureProvider):
@@ -273,19 +282,29 @@ def test_transport_and_semantic_failure_allowances_are_separate_and_durable(tmp_
     s = Store(tmp_path)
     world = declared_world(s, {})
     e = AutonomousResearch(s, world["executors"], lambda cfg, r: PlanningFixtureProvider(r))
-    o = e.create(AutonomySessionSpec(contract_ref=world["contract_ref"], runtime=RuntimeControls()))
+    o = e.create(
+        AutonomySessionSpec(
+            contract_ref=world["contract_ref"],
+            runtime=RuntimeControls(provider_backoff_seconds=0),
+        )
+    )
     failures = [{"reason": "provider ended without usage; legacy record"}] * 2 + [
         {"category": "invalid_decision", "reason": "bad draft"}
     ]
     assert e._role_failure_stop(o, role, 1, failures) is None
-    end = e._role_failure_stop(o, role, 1, [*failures, {"category": "provider_ended"}])
-    assert end["code"] == "PROVIDER_RETRY_EXHAUSTED"
+    # Each exhausted round first recovers in the same run with a fresh allowance.
+    for _ in range(AUTO_RECOVERY_ROUNDS):
+        failures = [*failures, *[{"category": "provider_ended"}] * (3 - (_ == 0))]
+        assert e._role_failure_stop(o, role, 1, failures) is None
+    failures = [*failures, *[{"category": "provider_ended"}] * 3]
+    end = e._role_failure_stop(o, role, 1, failures)
+    assert end["code"] == "PROVIDER_RETRY_EXHAUSTED" and end["recoverable"]
     assert s.status(o) == "NEEDS_ATTENTION"
     before = len(s.jobs(o))
     assert e.run(o)["status"] == "NEEDS_ATTENTION"
     assert len(s.jobs(o)) == before
     stopped = [x["payload"] for x in s.events(o) if x["event_type"] == "SESSION_PARTIAL_STOP"][-1]
-    assert stopped["failure_counts"] == {"invalid_decision": 1, "provider_ended": 3}
+    assert stopped["failure_counts"] == {"invalid_decision": 0, "provider_ended": 3}
     assert stopped["scientific_conclusion"] == "NOT_REACHED"
 
 

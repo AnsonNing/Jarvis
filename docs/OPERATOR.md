@@ -72,11 +72,14 @@ An already observed matched baseline is a visible comparison reference, not a ne
 experiment. Rejected draft references do not grant evidence visibility.
 
 Provider-ended failures and invalid decisions have separate finite allowances;
-`runtime_exit.stop_details` records which one ended. Counts and receipts survive
-another runner invocation. `resume` changes owner control only: it cannot clear
-`NEEDS_ATTENTION`/`BUDGET_EXHAUSTED` or change a pinned runtime. Diagnose a terminal
-session before proposing any continuation. Reservation settlements are estimates,
-not observed provider usage or billing.
+`runtime_exit.stop_details` records which one ended. When a role exhausts its
+allowance on one step, the same run recovers automatically (two rounds, earlier
+rejections shown to the role) before it stops. Such a stop is marked `recoverable`:
+`autonomy resume OWNER` grants fresh rounds in the same session and `autonomy run`
+continues; `brief` lists it with that command. Other `NEEDS_ATTENTION` stops (context
+envelope, integrity) and `BUDGET_EXHAUSTED` are not cleared by `resume`; diagnose them
+first. Counts and receipts survive another runner invocation. Reservation settlements
+are estimates, not observed provider usage or billing.
 
 An unattended engineering check is available at
 `examples/autonomy/runtime.declaration.yaml`. Start it in a fresh private store and

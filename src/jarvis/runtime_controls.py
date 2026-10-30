@@ -18,8 +18,8 @@ class RoleCallLimitExceeded(ContextEnvelopeExceeded):
 
 
 class RuntimeControls(Record):
-    max_context_bytes: int = Field(default=64000, ge=8000, le=150000)
-    max_prompt_bytes: int = Field(default=110000, ge=16000, le=190000)
+    max_context_bytes: int = Field(default=120000, ge=8000, le=150000)
+    max_prompt_bytes: int = Field(default=175000, ge=16000, le=190000)
     provider_retries: int = Field(default=2, ge=0, le=3)
     provider_backoff_seconds: float = Field(default=1, ge=0, le=30)
 
@@ -180,6 +180,28 @@ def bounded_context(store: Store, context: dict[str, Any], limit: int | None) ->
             "full_view_ref": full_ref,
             "omitted_counts": omitted,
             "instruction": "Catalog view is partial. Do not infer missing outcomes or cite omitted IDs. Immutable task, constraints and research plan are retained verbatim.",
+        }
+        if encoded_size(result) <= limit:
+            return result
+    # Last resort before refusing: standing owner intent stays (shortened, with the sealed
+    # full view referenced); older lesson detail and skill descriptions are dropped.
+    memory = result.get("research_memory")
+    if isinstance(memory, dict):
+        result["research_memory"] = {
+            "view_ref": full_ref,
+            "details_omitted": True,
+            "owner_guidance": [
+                str(g.get("text") if isinstance(g, dict) else g)[:300]
+                for g in memory.get("owner_guidance", [])[-8:]
+            ],
+            "owner_preferences": [
+                str(v.get("statement"))[:300]
+                for v in memory.get("lessons", [])
+                if isinstance(v, dict) and v.get("kind") == "owner_preference"
+            ][-8:],
+            "skills": [
+                s.get("name") if isinstance(s, dict) else s for s in memory.get("skills", [])
+            ],
         }
         if encoded_size(result) <= limit:
             return result
