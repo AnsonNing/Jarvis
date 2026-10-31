@@ -18,9 +18,10 @@ class RoleCallLimitExceeded(ContextEnvelopeExceeded):
 
 
 class RuntimeControls(Record):
-    max_context_bytes: int = Field(default=120000, ge=8000, le=150000)
-    max_prompt_bytes: int = Field(default=175000, ge=16000, le=190000)
-    provider_retries: int = Field(default=2, ge=0, le=3)
+    # Long studies accumulate evidence; large-context models take far more than the defaults.
+    max_context_bytes: int = Field(default=120000, ge=8000, le=1000000)
+    max_prompt_bytes: int = Field(default=175000, ge=16000, le=1200000)
+    provider_retries: int = Field(default=2, ge=0, le=10)
     provider_backoff_seconds: float = Field(default=1, ge=0, le=30)
 
 
@@ -46,6 +47,7 @@ def bounded_context(store: Store, context: dict[str, Any], limit: int | None) ->
             "candidates",
             "experiment_ledger",
             "observations",
+            "earlier_observations",
             "prior_evidence",
             "code_patches",
             "transcript",
@@ -68,6 +70,14 @@ def bounded_context(store: Store, context: dict[str, Any], limit: int | None) ->
                         "from_memory",
                         "action_index",
                         "profiles",
+                    ),
+                    "earlier_observations": (
+                        "index",
+                        "kind",
+                        "branch_id",
+                        "result_ref",
+                        "status",
+                        "result_summary",
                     ),
                     "observations": (
                         "index",
@@ -142,6 +152,15 @@ def bounded_context(store: Store, context: dict[str, Any], limit: int | None) ->
                 "skills": memory.get("skills", []),
                 "open_questions": memory.get("open_questions", [])[-keep:] if keep else [],
             }
+        lessons = context.get("research_memory_lessons")
+        if isinstance(lessons, list) and len(lessons) > keep:
+            # Critic views carry memory lessons as a flat list; owner preferences always stay.
+            kept = [
+                v for v in lessons if isinstance(v, dict) and v.get("kind") == "owner_preference"
+            ]
+            rest = [v for v in lessons if v not in kept]
+            result["research_memory_lessons"] = [*kept, *(rest[-keep:] if keep else [])]
+            omitted["research_memory_lessons"] = len(rest) - (min(keep, len(rest)) if keep else 0)
         visible = context.get("visible_evidence_ids", [])
         if len(visible) > 64:
 

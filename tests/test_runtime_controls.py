@@ -408,3 +408,34 @@ def test_cli_resume_continues_a_recoverable_stop_only(tmp_path):
     }
     recovery = [x["payload"] for x in s.events(o) if x["event_type"] == "ROLE_RECOVERY"][-1]
     assert recovery["mode"] == "manual"
+
+
+def test_critic_views_compact_earlier_observations_and_memory_lessons(tmp_path):
+    store = Store(tmp_path / "store")
+    big = "x" * 20000
+    context = {
+        "task": {"objective": "fixed"},
+        "result": {"status": "OBSERVED"},
+        "earlier_observations": [
+            {
+                "index": i,
+                "kind": "TRAIN_MODEL",
+                "result_ref": f"r{i}",
+                "status": "OBSERVED",
+                "result": {"validation": big},
+            }
+            for i in range(6)
+        ],
+        "research_memory_lessons": [{"kind": "owner_preference", "statement": "PR > 0.001"}]
+        + [{"kind": "finding", "statement": big} for _ in range(4)],
+    }
+    out = bounded_context(store, context, 60000)
+    assert encoded_size(out) <= 60000 and out["task"] == context["task"]
+    assert out["earlier_observations"][0] == {
+        "index": 0,
+        "kind": "TRAIN_MODEL",
+        "result_ref": "r0",
+        "status": "OBSERVED",
+        "details_omitted": True,
+    }
+    assert out["research_memory_lessons"][0]["kind"] == "owner_preference"
